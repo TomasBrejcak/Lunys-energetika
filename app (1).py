@@ -24,7 +24,7 @@ else:
 
 st.sidebar.divider()
 
-st.title("⚡ Energetický Dashboard Lunys")
+st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
 
 @st.cache_data
@@ -70,11 +70,10 @@ def load_data():
             continue
             
         # Ak riadok obsahuje "spotreba"
-       # Ak riadok obsahuje "spotreba"
-      # Ak riadok obsahuje "spotreba"
         if "spotreba" in combined_text.lower():
             raw_lower = combined_text.lower()
             
+            # Čisté mapovanie názvov bez chýb a prebytočných písmeniek
             if "bananáreň" in raw_lower:
                 clean_name = "Bananáreň"
             elif "zemiakareň" in raw_lower:
@@ -95,9 +94,6 @@ def load_data():
                 clean_name = "Hlavný elektromer / Nájomcovia"
             else:
                 clean_name = combined_text.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").strip().capitalize()
-            # Úprava formátu
-            if not clean_name:
-                clean_name = current_section
             
             kwh_vals = pd.to_numeric(row.values[2:11], errors='coerce')
             
@@ -126,43 +122,6 @@ def load_data():
                     })
                     
     elec_df = pd.DataFrame(records)
-    
-    # Ak by dynamický parser nenašiel nič, použijeme zoznam všetkých prevádzok
-    if elec_df.empty:
-        tracked_items = [
-            ("Trafostanica Haramia (Celkom)", "Nové trafo pre SH II a SH III. spotreba", "Nové trafo pre SH II a SH III. - náklad"),
-            ("Bananáreň", "Bananáreň spotreba", "Bananáreň - náklad"),
-            ("Zemiakareň", "Zemiakareň spotreba", "Zemiakareň - náklad"),
-            ("Trafostanica Pebek (Celkom)", "Staré trafo Pebek spotreba", "Staré trafo Pebek náklad"),
-            ("Skladová hala I.", "Skladová hala I. - spotreba", "Skladová hala I. - náklad"),
-            ("AB Správa", "AB Správa spotreba", "AB Správa- náklad"),
-            ("Hlavný elektromer / Náomcovia", "Hlavný elektromer /arál nájomcovia/ spotreba", "Hlavný elektromer /arál nájomcovia/ - náklad"),
-            ("Beňovský Apartments", "Beňovský Apartments spotreba", "Beňovský Apartments náklad")
-        ]
-        fallback_records = []
-        def extract_row_data(keyword):
-            for idx, row in df_elec_raw.iterrows():
-                row_text = str(row.values)
-                if keyword.lower() in row_text.lower():
-                    return pd.to_numeric(row.values[2:11], errors='coerce')
-            return None
-
-        for name, kwh_key, eur_key in tracked_items:
-            kwh_vals = extract_row_data(kwh_key)
-            eur_vals = extract_row_data(eur_key)
-            if kwh_vals is not None and eur_vals is not None:
-                for m, k, e in zip(months, kwh_vals, eur_vals):
-                    k_val = float(k) if pd.notna(k) else 0.0
-                    e_val = float(e) if pd.notna(e) else 0.0
-                    fallback_records.append({
-                        'Mesiac': m,
-                        'Odberné miesto': name,
-                        'Spotreba (kWh)': k_val,
-                        'Náklady (€)': e_val,
-                        'Cena (€/kWh)': (e_val / k_val) if k_val > 0 else 0.0
-                    })
-        elec_df = pd.DataFrame(fallback_records)
-
     return fve_df, elec_df
 
 try:
@@ -239,16 +198,11 @@ with tab1:
             fig_elec_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_elec_kwh, use_container_width=True)
             
-       with col_right:
-            fig_fve_eur = px.bar(
-                filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', barmode='group',
-                text='Uspora_EUR',
-                title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
+        with col_right:
+            fig_elec_eur = px.bar(
+                sub_elec, x='Mesiac', y='Náklady (€)', color='Odberné miesto', barmode='group',
+                title="Mesačné náklady (€)", labels={'Náklady (€)': 'Náklady (€)', 'Mesiac': 'Mesiac'}
             )
-            fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside')
-            fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
-            st.plotly_chart(fig_fve_eur, use_container_width=True)
-           )
             fig_elec_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_elec_eur, use_container_width=True)
     else:
@@ -265,24 +219,30 @@ with tab2:
     with col_left:
         fig_fve_kwh = px.bar(
             filtered_fve, x='Mesiac', y='Vyroba_kWh', color='Lokalita', barmode='group',
+            text='Vyroba_kWh',
             title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'}
         )
+        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside')
         fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
         st.plotly_chart(fig_fve_kwh, use_container_width=True)
         
     with col_right:
-        fig_fve_eur = px.line(
-            filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', markers=True,
+        fig_fve_eur = px.bar(
+            filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', barmode='group',
+            text='Uspora_EUR',
             title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
         )
+        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside')
         fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
         st.plotly_chart(fig_fve_eur, use_container_width=True)
 
     st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
     fig_pct = px.bar(
         filtered_fve, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita', barmode='group',
+        text='Podiel_Pokrytia_Pct',
         title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'}
     )
+    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside')
     fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
     st.plotly_chart(fig_pct, use_container_width=True)
 
