@@ -240,9 +240,14 @@ with tab1:
             st.plotly_chart(fig_elec_kwh, use_container_width=True)
             
         with col_right:
-            fig_elec_eur = px.bar(
-                sub_elec, x='Mesiac', y='Náklady (€)', color='Odberné miesto', barmode='group',
-                title="Mesačné náklady (€)", labels={'Náklady (€)': 'Náklady (€)', 'Mesiac': 'Mesiac'}
+            fig_fve_eur = px.bar(
+                filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', barmode='group',
+                text='Uspora_EUR',
+                title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
+            )
+            fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside')
+            fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
+            st.plotly_chart(fig_fve_eur, use_container_width=True)
             )
             fig_elec_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_elec_eur, use_container_width=True)
