@@ -221,25 +221,36 @@ with tab2:
         'Podiel_Pokrytia_Pct': 'mean'
     }).reset_index()
 
+    # Doplnenie konkrétnych hodnôt priamo do názvov pre koláčové grafy (legenda)
+    pie_labels_kwh = []
+    pie_labels_eur = []
+    for idx, row in summary_fve.iterrows():
+        loc = row['Lokalita_raw']
+        pie_labels_kwh.append(f"{loc}: {row['Vyroba_kWh']:,.0f} kWh")
+        pie_labels_eur.append(f"{loc}: {row['Uspora_EUR']:,.0f} €")
+        
+    summary_fve['Label_KWh'] = pie_labels_kwh
+    summary_fve['Label_EUR'] = pie_labels_eur
+
     col_sum1, col_sum2 = st.columns(2)
     
     with col_sum1:
         fig_pie_kwh = px.pie(
-            summary_fve, names='Lokalita_raw', values='Vyroba_kWh',
-            title="Podiel lokalít na celkovej výrobe FVE (kWh)",
+            summary_fve, names='Label_KWh', values='Vyroba_kWh',
+            title="Podiel lokalít na celkovej výrobe FVE",
             hole=0.4, template="plotly_dark"
         )
-        fig_pie_kwh.update_traces(textinfo='percent+label', textfont=dict(size=16, color='white'))
+        fig_pie_kwh.update_traces(textinfo='percent', textfont=dict(size=16, color='white'))
         fig_pie_kwh.update_layout(font=dict(size=14))
         st.plotly_chart(fig_pie_kwh, use_container_width=True)
         
     with col_sum2:
         fig_pie_eur = px.pie(
-            summary_fve, names='Lokalita_raw', values='Uspora_EUR',
-            title="Podiel lokalít na finančných úsporách (€)",
+            summary_fve, names='Label_EUR', values='Uspora_EUR',
+            title="Podiel lokalít na finančných úsporách",
             hole=0.4, template="plotly_dark"
         )
-        fig_pie_eur.update_traces(textinfo='percent+label', textfont=dict(size=16, color='white'))
+        fig_pie_eur.update_traces(textinfo='percent', textfont=dict(size=16, color='white'))
         fig_pie_eur.update_layout(font=dict(size=14))
         st.plotly_chart(fig_pie_eur, use_container_width=True)
 
@@ -257,7 +268,6 @@ with tab2:
         tot_kwh = sub['Vyroba_kWh'].sum()
         tot_eur = sub['Uspora_EUR'].sum()
         
-        # Každý graf dostane presne to označenie, ktoré k nemu patrí (žiadne kombinovanie)
         lbl_kwh.append(f"{loc} (Spolu: {tot_kwh:,.0f} kWh)")
         lbl_eur.append(f"{loc} (Spolu: {tot_eur:,.0f} €)")
         lbl_pct.append(f"{loc} (Spolu: {tot_kwh:,.0f} kWh / {tot_eur:,.0f} €)")
