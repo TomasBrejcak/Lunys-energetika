@@ -24,7 +24,7 @@ else:
 
 st.sidebar.divider()
 
-st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
+st.title("⚡ Energetický Dashboard Lunys")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
 
 @st.cache_data
