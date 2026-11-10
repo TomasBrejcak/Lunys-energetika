@@ -220,9 +220,9 @@ with tab2:
             text='Vyroba_kWh',
             title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'}
         )
-        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=14, family="Arial Black"))
+        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=13, color='black'))
         fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_kwh.update_layout(font=dict(size=14), uniformtext_minsize=10, uniformtext_mode='hide')
+        fig_fve_kwh.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_kwh, use_container_width=True)
         
     with col_right:
@@ -231,9 +231,9 @@ with tab2:
             text='Uspora_EUR',
             title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
         )
-        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=14, family="Arial Black"))
+        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=13, color='black'))
         fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_eur.update_layout(font=dict(size=14), uniformtext_minsize=10, uniformtext_mode='hide')
+        fig_fve_eur.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_eur, use_container_width=True)
 
     st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
@@ -242,9 +242,9 @@ with tab2:
         text='Podiel_Pokrytia_Pct',
         title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'}
     )
-    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=14, family="Arial Black"))
+    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=13, color='black'))
     fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
-    fig_pct.update_layout(font=dict(size=14), uniformtext_minsize=10, uniformtext_mode='hide')
+    fig_pct.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
     st.plotly_chart(fig_pct, use_container_width=True)
 
     st.markdown("#### Detailné dáta FVE 2026")
