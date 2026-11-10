@@ -24,7 +24,7 @@ else:
 
 st.sidebar.divider()
 
-st.title("⚡ Energetický Dashboard Lunys)
+st.title("⚡ Energetický Dashboard Lunys ")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov a úspor z fotovoltických elektrární (Poprad & Bratislava).")
 
 @st.cache_data
