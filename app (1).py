@@ -139,17 +139,6 @@ selected_months = st.sidebar.multiselect(
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy()
 
-# Dynamické doplnenie celkových súčtov k lokalitám pre lepšiu prehľadnosť v legende
-loc_labels = []
-for idx, row in filtered_fve.iterrows():
-    loc = row['Lokalita_raw']
-    sub_loc = filtered_fve[filtered_fve['Lokalita_raw'] == loc]
-    tot_kwh = sub_loc['Vyroba_kWh'].sum()
-    tot_eur = sub_loc['Uspora_EUR'].sum()
-    loc_labels.append(f"{loc} (Spolu: {tot_kwh:,.0f} kWh / {tot_eur:,.0f} €)")
-
-filtered_fve['Lokalita'] = loc_labels
-
 filtered_fve['Mesiac'] = pd.Categorical(filtered_fve['Mesiac'], categories=month_order, ordered=True)
 filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
 filtered_fve = filtered_fve.sort_values('Mesiac')
@@ -224,39 +213,55 @@ with tab1:
 with tab2:
     st.subheader("Porovnanie výroby a úspor FVE: Poprad vs. Bratislava")
     
+    # Príprava samostatných lokalitných názvov s presnými súčtami pre jednotlivé grafy
+    df_kwh = filtered_fve.copy()
+    df_eur = filtered_fve.copy()
+    df_pct = filtered_fve.copy()
+    
+    lbl_kwh, lbl_eur, lbl_pct = [], [], []
+    for idx, row in filtered_fve.iterrows():
+        loc = row['Lokalita_raw']
+        sub = filtered_fve[filtered_fve['Lokalita_raw'] == loc]
+        lbl_kwh.append(f"{loc} (Spolu: {sub['Vyroba_kWh'].sum():,.0f} kWh)")
+        lbl_eur.append(f"{loc} (Spolu: {sub['Uspora_EUR'].sum():,.0f} €)")
+        lbl_pct.append(f"{loc} (Priemer: {sub['Podiel_Pokrytia_Pct'].mean():.1f} %)")
+        
+    df_kwh['Lokalita_FVE'] = lbl_kwh
+    df_eur['Lokalita_FVE'] = lbl_eur
+    df_pct['Lokalita_FVE'] = lbl_pct
+
     col_left, col_right = st.columns(2)
     with col_left:
         fig_fve_kwh = px.bar(
-            filtered_fve, x='Mesiac', y='Vyroba_kWh', color='Lokalita', barmode='group',
+            df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
             text='Vyroba_kWh',
             title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'}
         )
-        # Zväčšenie písma na 16px, biela farba s tučným obrysom
-        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=15, color='white', weight='bold'))
+        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=16, color='white', weight='bold'))
         fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_kwh.update_layout(font=dict(size=14), margin=dict(t=70, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+        fig_fve_kwh.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_kwh, use_container_width=True)
         
     with col_right:
         fig_fve_eur = px.bar(
-            filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', barmode='group',
+            df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
             text='Uspora_EUR',
             title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
         )
-        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=15, color='white', weight='bold'))
+        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=16, color='white', weight='bold'))
         fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=70, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+        fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_eur, use_container_width=True)
 
     st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
     fig_pct = px.bar(
-        filtered_fve, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita', barmode='group',
+        df_pct, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita_FVE', barmode='group',
         text='Podiel_Pokrytia_Pct',
         title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'}
     )
-    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=15, color='white', weight='bold'))
+    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=16, color='white', weight='bold'))
     fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
-    fig_pct.update_layout(font=dict(size=14), margin=dict(t=70, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    fig_pct.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
     st.plotly_chart(fig_pct, use_container_width=True)
 
     st.markdown("#### Detailné dáta FVE 2026")
