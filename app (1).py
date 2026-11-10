@@ -24,7 +24,7 @@ else:
 
 st.sidebar.divider()
 
-st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
+st.title("⚡ Energetický Dashboard Lunys ")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
 
 @st.cache_data
@@ -52,32 +52,47 @@ def load_data():
         'Podiel_Pokrytia_Pct': list(poprad_pct) + list(ba_pct)
     })
     
-    # 2. Načítanie Spotreby Elektro 2026
-    df_elec_raw = pd.read_excel(xls, sheet_name='Prehľad elektro.2026')
+    # 2. Načítanie Spotreby Elektro 2026 podľa presných názvov zo snímky obrazovky
+    df_elec_raw = pd.read_excel(xls, sheet_name='Prehľad elektro.2026', header=None)
     
-    items = [
-        ('Trafo Haramia (Celkom)', 1, 2),
-        ('Bananáreň', 3, 4),
-        ('Zemiakareň', 5, 6),
-        ('Trafo Pebek (Celkom)', 11, 12),
-        ('Skladová hala I.', 13, 14),
-        ('AB Správa', 16, 17),
-        ('Beňovský Apartments', 27, 28)
+    # Pomocná funkcia na vyhľadanie riadku podľa kľúčového slova v stĺpci B (index 1) alebo A (index 0)
+    def extract_row_data(keyword):
+        for idx, row in df_elec_raw.iterrows():
+            row_text = str(row.values)
+            if keyword.lower() in row_text.lower():
+                # Hodnoty mesiacov sú v stĺpci C až K (indexy 2 až 10)
+                vals = pd.to_numeric(row.values[2:11], errors='coerce')
+                return vals
+        return None
+
+    # Zoznam sledovaných miest presne podľa tvojho Excelu
+    tracked_items = [
+        ("Nové trafo SH II+III (Celkom)", "Nové trafo pre SH II a SH III. spotreba", "Nové trafo pre SH II a SH III. - náklad"),
+        ("Bananáreň", "Bananáreň spotreba", "Bananáreň - náklad"),
+        ("Zemiakareň", "Zemiakareň spotreba", "Zemiakareň - náklad"),
+        ("Staré trafo Pebek (Celkom)", "Staré trafo Pebek spotreba", "Staré trafo Pebek náklad"),
+        ("Skladová hala I.", "Skladová hala I. - spotreba", "Skladová hala I. - náklad"),
+        ("AB Správa", "AB Správa spotreba", "AB Správa- náklad"),
+        ("Beňovský Apartments", "Beňovský Apartments spotreba", "Beňovský Apartments náklad")
     ]
     
     records = []
-    for name, r_kwh, r_eur in items:
-        kwh_vals = df_elec_raw.iloc[r_kwh, 2:11].values.astype(float)
-        eur_vals = df_elec_raw.iloc[r_eur, 2:11].values.astype(float)
-        for m, k, e in zip(months, kwh_vals, eur_vals):
-            records.append({
-                'Mesiac': m,
-                'Odberne_Miesto': name,
-                'Spotreba_kWh': k,
-                'Naklad_EUR': e,
-                'Jednotkova_Cena_EUR_kWh': (e / k) if k > 0 else 0.0
-            })
-            
+    for name, kwh_key, eur_key in tracked_items:
+        kwh_vals = extract_row_data(kwh_key)
+        eur_vals = extract_row_data(eur_key)
+        
+        if kwh_vals is not None and eur_vals is not None:
+            for m, k, e in zip(months, kwh_vals, eur_vals):
+                k_val = float(k) if pd.notna(k) else 0.0
+                e_val = float(e) if pd.notna(e) else 0.0
+                records.append({
+                    'Mesiac': m,
+                    'Odberne_Miesto': name,
+                    'Spotreba_kWh': k_val,
+                    'Naklad_EUR': e_val,
+                    'Jednotkova_Cena_EUR_kWh': (e_val / k_val) if k_val > 0 else 0.0
+                })
+                
     elec_df = pd.DataFrame(records)
     return fve_df, elec_df
 
@@ -100,18 +115,17 @@ selected_months = st.sidebar.multiselect(
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy()
 
-# Zachovanie správneho poradia mesiacov
+# Zachowanie správneho poradia mesiacov
 filtered_fve['Mesiac'] = pd.Categorical(filtered_fve['Mesiac'], categories=month_order, ordered=True)
 filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
 filtered_fve = filtered_fve.sort_values('Mesiac')
 filtered_elec = filtered_elec.sort_values('Mesiac')
 
 # Výpočet celkových dát pre hlavné odberné miesta
-main_om = filtered_elec[filtered_elec['Odberne_Miesto'].isin(['Trafo Haramia (Celkom)', 'Trafo Pebek (Celkom)', 'Beňovský Apartments'])]
+main_om = filtered_elec[filtered_elec['Odberne_Miesto'].isin(['Nové trafo SH II+III (Celkom)', 'Staré trafo Pebek (Celkom)', 'Beňovský Apartments'])]
 total_elec_kwh = main_om['Spotreba_kWh'].sum()
 total_elec_eur = main_om['Naklad_EUR'].sum()
 
-# Výpočet priemernej ceny 1 kWh zo siete
 avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
 
 total_fve_kwh = filtered_fve['Vyroba_kWh'].sum()
@@ -210,7 +224,7 @@ with tab2:
 # ZÁLOŽKA 3: JEDNOTKOVÁ CENA ZA 1 KWH
 with tab3:
     st.subheader("Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh)")
-    st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach.")
+    st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach ( SPOT + marža ).")
     
     if not filtered_elec.empty:
         fig_price_trend = px.line(
