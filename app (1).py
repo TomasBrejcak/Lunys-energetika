@@ -211,7 +211,7 @@ with tab1:
     st.markdown("#### Tabuľkový prehľad spotreby a nákladov")
     st.dataframe(filtered_elec, use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 2: FOTOVOLTIKA
+# ZÁLOŽKA 2: FOTOVOLTIKA (GRAFY POD SEBOU)
 with tab2:
     st.subheader("Porovnanie výroby a úspor FVE: Poprad vs. Bratislava")
     
@@ -231,41 +231,44 @@ with tab2:
     df_eur['Lokalita_FVE'] = lbl_eur
     df_pct['Lokalita_FVE'] = lbl_pct
 
-    col_left, col_right = st.columns(2)
-    with col_left:
-        fig_fve_kwh = px.bar(
-            df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
-            text='Vyroba_kWh',
-            title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'},
-            template="plotly_dark"
-        )
-        fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=20, color='white', family="Arial Black"))
-        fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_kwh.update_layout(font=dict(size=14), margin=dict(t=100, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
-        st.plotly_chart(fig_fve_kwh, use_container_width=True)
-        
-    with col_right:
-        fig_fve_eur = px.bar(
-            df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
-            text='Uspora_EUR',
-            title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'},
-            template="plotly_dark"
-        )
-        fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=20, color='white', family="Arial Black"))
-        fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=100, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
-        st.plotly_chart(fig_fve_eur, use_container_width=True)
+    # 1. GRAF: Mesačná výroba FVE (na plnú šírku)
+    fig_fve_kwh = px.bar(
+        df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
+        text='Vyroba_kWh',
+        title="☀️ Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'},
+        template="plotly_dark", height=500
+    )
+    fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
+    fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
+    fig_fve_kwh.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    st.plotly_chart(fig_fve_kwh, use_container_width=True)
 
-    st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
+    st.divider()
+
+    # 2. GRAF: Finančná úspora FVE (na plnú šírku)
+    fig_fve_eur = px.bar(
+        df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
+        text='Uspora_EUR',
+        title="💰 Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'},
+        template="plotly_dark", height=500
+    )
+    fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
+    fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
+    fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    st.plotly_chart(fig_fve_eur, use_container_width=True)
+
+    st.divider()
+
+    # 3. GRAF: % Podiel FVE (na plnú šírku)
     fig_pct = px.bar(
         df_pct, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita_FVE', barmode='group',
         text='Podiel_Pokrytia_Pct',
-        title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'},
-        template="plotly_dark"
+        title="📈 Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'},
+        template="plotly_dark", height=500
     )
-    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=20, color='white', family="Arial Black"))
+    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
     fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
-    fig_pct.update_layout(font=dict(size=14), margin=dict(t=100, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    fig_pct.update_layout(font=dict(size=14), margin=dict(t=80, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
     st.plotly_chart(fig_pct, use_container_width=True)
 
     st.markdown("#### Detailné dáta FVE 2026")
