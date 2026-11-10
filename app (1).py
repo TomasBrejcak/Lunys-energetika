@@ -222,7 +222,7 @@ with tab2:
         )
         fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=13, color='black'))
         fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_kwh.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
+        fig_fve_kwh.update_layout(font=dict(size=14), margin=dict(t=60, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_kwh, use_container_width=True)
         
     with col_right:
@@ -233,7 +233,7 @@ with tab2:
         )
         fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=13, color='black'))
         fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
-        fig_fve_eur.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
+        fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=60, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
         st.plotly_chart(fig_fve_eur, use_container_width=True)
 
     st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
@@ -244,7 +244,7 @@ with tab2:
     )
     fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=13, color='black'))
     fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
-    fig_pct.update_layout(font=dict(size=14), bargap=0.15, bargroupgap=0.05)
+    fig_pct.update_layout(font=dict(size=14), margin=dict(t=60, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
     st.plotly_chart(fig_pct, use_container_width=True)
 
     st.markdown("#### Detailné dáta FVE 2026")
