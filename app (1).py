@@ -82,6 +82,8 @@ def load_data():
                 clean_name = "Trafostanica Haramia (Celkom)"
             elif "pebek" in raw_lower or "staré trafo" in raw_lower:
                 clean_name = "Trafostanica Pebek (Celkom)"
+                elif "feld" in raw_lower or "bratislava" in raw_lower:
+                clean_name = "Bratislava – Trafo Feld"
             elif "skladová hala" in raw_lower:
                 clean_name = "Skladová hala I."
             elif "ab správa" in raw_lower:
