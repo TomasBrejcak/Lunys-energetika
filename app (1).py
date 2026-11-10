@@ -25,7 +25,7 @@ else:
 st.sidebar.divider()
 
 st.title("⚡ Energetický Dashboard Lunys ")
-st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, priemernej ceny za 1 kWh a úspor z FVE (Poprad & Bratislava).")
+st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
 
 @st.cache_data
 def load_data():
@@ -109,78 +109,23 @@ total_fve_eur = filtered_fve['Uspora_EUR'].sum()
 st.subheader("📊 Kľúčové ukazovatele 2026 (Vybrané mesiace)")
 c1, c2, c3, c4, c5 = st.columns(5)
 
-c1.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
-c2.metric("🔌 Odber zo siete", f"{total_elec_kwh:,.0f} kWh")
-c3.metric("💶 Náklady na sieť", f"{total_elec_eur:,.2f} €")
-c4.metric("☀️ Výroba FVE", f"{total_fve_kwh:,.0f} kWh")
-c5.metric("💰 Úspora FVE", f"{total_fve_eur:,.2f} €")
+c1.metric("🔌 Odber zo siete", f"{total_elec_kwh:,.0f} kWh")
+c2.metric("💶 Náklady na sieť", f"{total_elec_eur:,.2f} €")
+c3.metric("☀️ Výroba FVE", f"{total_fve_kwh:,.0f} kWh")
+c4.metric("💰 Úspora FVE", f"{total_fve_eur:,.2f} €")
+c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
 
 st.divider()
 
-# Záložky
-tab1, tab2, tab3 = st.tabs(["💶 Jednotková cena za 1 kWh", "☀️ Výkon Fotovoltiky (FVE)", "📉 Spotreby & Náklady Odberných Miest"])
+# Usporiadanie záložiek: 1. Spotreba, 2. Fotovoltika, 3. Jednotková cena
+tab1, tab2, tab3 = st.tabs([
+    "📉 Spotreby & Náklady Odberných Miest", 
+    "☀️ Výkon Fotovoltiky (FVE)", 
+    "💶 Jednotková cena za 1 kWh"
+])
 
+# ZÁLOŽKA 1: SPOTREBY A NÁKLADY
 with tab1:
-    st.subheader("Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh)")
-    st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach.")
-    
-    fig_price_trend = px.line(
-        filtered_elec, 
-        x='Mesiac', 
-        y='Jednotkova_Cena_EUR_kWh', 
-        color='Odberne_Miesto', 
-        markers=True,
-        title="Vývoj ceny 1 kWh podľa odberných miest (€/kWh)",
-        labels={'Jednotkova_Cena_EUR_kWh': 'Cena (€/kWh)', 'Mesiac': 'Mesiac'}
-    )
-    fig_price_trend.update_yaxes(tickformat=".4f")
-    st.plotly_chart(fig_price_trend, use_container_width=True)
-
-    # Priemerná cena podľa odberného miesta v tabuľke
-    st.markdown("### Priemerná cena 1 kWh za vybrané obdobie")
-    avg_price_by_om = filtered_elec.groupby('Odberne_Miesto').apply(
-        lambda x: pd.Series({
-            'Celková spotreba (kWh)': x['Spotreba_kWh'].sum(),
-            'Celkové náklady (€)': x['Naklad_EUR'].sum(),
-            'Priemerná cena (€/kWh)': x['Naklad_EUR'].sum() / x['Spotreba_kWh'].sum() if x['Spotreba_kWh'].sum() > 0 else 0
-        })
-    ).reset_index()
-    
-    st.dataframe(
-        avg_price_by_om.style.format({
-            'Celková spotreba (kWh)': '{:,.0f}',
-            'Celkové náklady (€)': '{:,.2f} €',
-            'Priemerná cena (€/kWh)': '{:.4f} €'
-        }),
-        use_container_width=True
-    )
-
-with tab2:
-    st.subheader("Porovnanie výroby a úspor FVE: Poprad vs. Bratislava")
-    
-    col_left, col_right = st.columns(2)
-    with col_left:
-        fig_fve_kwh = px.bar(
-            filtered_fve, x='Mesiac', y='Vyroba_kWh', color='Lokalita', barmode='group',
-            title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)'}
-        )
-        st.plotly_chart(fig_fve_kwh, use_container_width=True)
-        
-    with col_right:
-        fig_fve_eur = px.line(
-            filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', markers=True,
-            title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)'}
-        )
-        st.plotly_chart(fig_fve_eur, use_container_width=True)
-
-    st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
-    fig_pct = px.bar(
-        filtered_fve, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita', barmode='group',
-        title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)'}
-    )
-    st.plotly_chart(fig_pct, use_container_width=True)
-
-with tab3:
     st.subheader("Mesačný vývoj spotreby a nákladov podľa prevádzok")
     
     om_options = filtered_elec['Odberne_Miesto'].unique()
@@ -188,17 +133,19 @@ with tab3:
     
     sub_elec = filtered_elec[filtered_elec['Odberne_Miesto'].isin(selected_om)]
     
-    fig_elec_kwh = px.bar(
-        sub_elec, x='Mesiac', y='Spotreba_kWh', color='Odberne_Miesto', barmode='group',
-        title="Spotreba elektriny (kWh)"
-    )
-    st.plotly_chart(fig_elec_kwh, use_container_width=True)
-    
-    fig_elec_eur = px.bar(
-        sub_elec, x='Mesiac', y='Naklad_EUR', color='Odberne_Miesto', barmode='group',
-        title="Mesačné náklady v €"
-    )
-    st.plotly_chart(fig_elec_eur, use_container_width=True)
+    col_left, col_right = st.columns(2)
+    with col_left:
+        fig_elec_kwh = px.bar(
+            sub_elec, x='Mesiac', y='Spotreba_kWh', color='Odberne_Miesto', barmode='group',
+            title="Spotreba elektriny (kWh)", labels={'Spotreba_kWh': 'Spotreba (kWh)', 'Mesiac': 'Mesiac'}
+        )
+        st.plotly_chart(fig_elec_kwh, use_container_width=True)
+        
+    with col_right:
+        fig_elec_eur = px.bar(
+            sub_elec, x='Mesiac', y='Naklad_EUR', color='Odberne_Miesto', barmode='group',
+            title="Mesačné náklady (€)", labels={'Naklad_EUR': 'Náklady (€)', 'Mesiac': 'Mesiac'}
+        )
+        st.plotly_chart(fig_elec_eur, use_container_width=True)
 
-    st.markdown("#### Detailné surové dáta")
-    st.dataframe(filtered_elec, use_container_width=True)
+    st
