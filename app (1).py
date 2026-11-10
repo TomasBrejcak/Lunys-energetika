@@ -74,7 +74,7 @@ def load_data():
             # Vyčistenie názvu prevádzky
             name_raw = combined_text
             # Odstránenie nepotrebných prípon
-            clean_name = name_raw.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").replace("z trafo haramia", "").replace("z trafo pebek", "").strip()
+            clean_name = name_raw.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").replace("k", "").replace("z trafo haramia", "").replace("z trafo pebek", "").strip().capitalize()
             # Úprava formátu
             if not clean_name:
                 clean_name = current_section
