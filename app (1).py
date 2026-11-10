@@ -70,11 +70,28 @@ def load_data():
             continue
             
         # Ak riadok obsahuje "spotreba"
+       # Ak riadok obsahuje "spotreba"
         if "spotreba" in combined_text.lower():
-            # Vyčistenie názvu prevádzky
-            name_raw = combined_text
-            # Odstránenie nepotrebných prípon
-            clean_name = name_raw.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").replace("k", "").replace("z trafo haramia", "").replace("z trafo pebek", "").strip().capitalize()
+            raw_lower = combined_text.lower()
+            
+            if "bananáreň" in raw_lower:
+                clean_name = "Bananáreň"
+            elif "zemiakareň" in raw_lower:
+                clean_name = "Zemiakareň"
+            elif "haramia" in raw_lower or "nové trafo" in raw_lower:
+                clean_name = "Trafostanica Haramia (Celkom)"
+            elif "pebek" in raw_lower or "staré trafo" in raw_lower:
+                clean_name = "Trafostanica Pebek (Celkom)"
+            elif "skladová hala" in raw_lower:
+                clean_name = "Skladová hala I."
+            elif "ab správa" in raw_lower:
+                clean_name = "AB Správa"
+            elif "beňovský" in raw_lower:
+                clean_name = "Beňovský Apartments"
+            elif "nájomcovia" in raw_lower or "arál" in raw_lower:
+                clean_name = "Hlavný elektromer / Nájomcovia"
+            else:
+                clean_name = combined_text.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").strip().capitalize()
             # Úprava formátu
             if not clean_name:
                 clean_name = current_section
