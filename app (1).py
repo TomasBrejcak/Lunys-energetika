@@ -239,7 +239,7 @@ with tab1:
             fig_elec_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_elec_kwh, use_container_width=True)
             
-        with col_right:
+       with col_right:
             fig_fve_eur = px.bar(
                 filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', barmode='group',
                 text='Uspora_EUR',
@@ -248,7 +248,6 @@ with tab1:
             fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside')
             fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_fve_eur, use_container_width=True)
-            
             fig_elec_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
             st.plotly_chart(fig_elec_eur, use_container_width=True)
     else:
