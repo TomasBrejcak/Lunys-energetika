@@ -1,0 +1,255 @@
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import os
+
+# Nastavenie stránky
+st.set_page_config(
+    page_title="Energetický Dashboard LUNYS 2026",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# --- LOGO V SIDEBARE ---
+if os.path.exists("logo.svg"):
+    st.sidebar.image("logo.svg", width=220)
+elif os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", width=220)
+elif os.path.exists("logo.jpg"):
+    st.sidebar.image("logo.jpg", width=220)
+else:
+    st.sidebar.markdown("### LUNYS, s.r.o.")
+
+st.sidebar.divider()
+
+st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
+st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
+
+@st.cache_data
+def load_data():
+    file_path = "Spotreby energií.xlsx"
+    xls = pd.ExcelFile(file_path)
+    
+    # 1. Načítanie FVE dáta 2026
+    df_fve_raw = pd.read_excel(xls, sheet_name='Prehľad po FVE.2026')
+    months = ['Január', 'Február', 'Marec', 'Apríl', 'Máj', 'Jún', 'Júl', 'August', 'September']
+    
+    poprad_kwh = df_fve_raw.iloc[1, 2:11].values.astype(float)
+    poprad_eur = df_fve_raw.iloc[2, 2:11].values.astype(float)
+    poprad_pct = df_fve_raw.iloc[3, 2:11].values.astype(float)
+    
+    ba_kwh = df_fve_raw.iloc[4, 2:11].values.astype(float)
+    ba_eur = df_fve_raw.iloc[5, 2:11].values.astype(float)
+    ba_pct = df_fve_raw.iloc[6, 2:11].values.astype(float)
+    
+    fve_df = pd.DataFrame({
+        'Mesiac': months * 2,
+        'Lokalita': ['Poprad'] * 9 + ['Bratislava'] * 9,
+        'Vyroba_kWh': list(poprad_kwh) + list(ba_kwh),
+        'Uspora_EUR': list(poprad_eur) + list(ba_eur),
+        'Podiel_Pokrytia_Pct': list(poprad_pct) + list(ba_pct)
+    })
+    
+    # 2. Načítanie Spotreby Elektro 2026
+    df_elec_raw = pd.read_excel(xls, sheet_name='Prehľad elektro.2026')
+    
+    items = [
+        ('Trafo Haramia (Celkom)', 1, 2),
+        ('Bananáreň', 3, 4),
+        ('Zemiakareň', 5, 6),
+        ('Trafo Pebek (Celkom)', 11, 12),
+        ('Skladová hala I.', 13, 14),
+        ('AB Správa', 16, 17),
+        ('Beňovský Apartments', 27, 28)
+    ]
+    
+    records = []
+    for name, r_kwh, r_eur in items:
+        kwh_vals = df_elec_raw.iloc[r_kwh, 2:11].values.astype(float)
+        eur_vals = df_elec_raw.iloc[r_eur, 2:11].values.astype(float)
+        for m, k, e in zip(months, kwh_vals, eur_vals):
+            records.append({
+                'Mesiac': m,
+                'Odberne_Miesto': name,
+                'Spotreba_kWh': k,
+                'Naklad_EUR': e,
+                'Jednotkova_Cena_EUR_kWh': (e / k) if k > 0 else 0.0
+            })
+            
+    elec_df = pd.DataFrame(records)
+    return fve_df, elec_df
+
+try:
+    fve_df, elec_df = load_data()
+except Exception as e:
+    st.error(f"Chyba pri načítaní Excel súboru: {e}")
+    st.stop()
+
+# Filtre v sidebare
+st.sidebar.subheader("🔍 Filtre")
+month_order = list(fve_df['Mesiac'].unique())
+selected_months = st.sidebar.multiselect(
+    "Vyber mesiace", 
+    options=month_order, 
+    default=month_order
+)
+
+# Filtrovanie dát
+filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy()
+filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy()
+
+# Zachovanie správneho poradia mesiacov
+filtered_fve['Mesiac'] = pd.Categorical(filtered_fve['Mesiac'], categories=month_order, ordered=True)
+filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
+filtered_fve = filtered_fve.sort_values('Mesiac')
+filtered_elec = filtered_elec.sort_values('Mesiac')
+
+# Výpočet celkových dát pre hlavné odberné miesta
+main_om = filtered_elec[filtered_elec['Odberne_Miesto'].isin(['Trafo Haramia (Celkom)', 'Trafo Pebek (Celkom)', 'Beňovský Apartments'])]
+total_elec_kwh = main_om['Spotreba_kWh'].sum()
+total_elec_eur = main_om['Naklad_EUR'].sum()
+
+# Výpočet priemernej ceny 1 kWh zo siete
+avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
+
+total_fve_kwh = filtered_fve['Vyroba_kWh'].sum()
+total_fve_eur = filtered_fve['Uspora_EUR'].sum()
+
+# KPI Sumár (5 stĺpcov)
+st.subheader("📊 Kľúčové ukazovatele 2026 (Vybrané mesiace)")
+c1, c2, c3, c4, c5 = st.columns(5)
+
+c1.metric("🔌 Odber zo siete", f"{total_elec_kwh:,.0f} kWh")
+c2.metric("💶 Náklady na sieť", f"{total_elec_eur:,.2f} €")
+c3.metric("☀️ Výroba FVE", f"{total_fve_kwh:,.0f} kWh")
+c4.metric("💰 Úspora FVE", f"{total_fve_eur:,.2f} €")
+c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
+
+st.divider()
+
+# Definícia záložiek
+tab1, tab2, tab3 = st.tabs([
+    "📉 Spotreby & Náklady Odberných Miest", 
+    "☀️ Výkon Fotovoltiky (FVE)", 
+    "💶 Jednotková cena za 1 kWh"
+])
+
+# ZÁLOŽKA 1: SPOTREBY A NÁKLADY
+with tab1:
+    st.subheader("Mesačný vývoj spotreby a nákladov podľa prevádzok")
+    
+    om_options = list(filtered_elec['Odberne_Miesto'].unique())
+    default_om = [om for om in ['Bananáreň', 'Zemiakareň', 'Skladová hala I.', 'Beňovský Apartments'] if om in om_options]
+    
+    selected_om = st.multiselect(
+        "Vyber odberné miesta pre zobrazenie v grafoch:", 
+        options=om_options, 
+        default=default_om, 
+        key="om_filter_tab1"
+    )
+    
+    sub_elec = filtered_elec[filtered_elec['Odberne_Miesto'].isin(selected_om)]
+    
+    if not sub_elec.empty:
+        col_left, col_right = st.columns(2)
+        with col_left:
+            fig_elec_kwh = px.bar(
+                sub_elec, x='Mesiac', y='Spotreba_kWh', color='Odberne_Miesto', barmode='group',
+                title="Spotreba elektriny (kWh)", labels={'Spotreba_kWh': 'Spotreba (kWh)', 'Mesiac': 'Mesiac'}
+            )
+            fig_elec_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
+            st.plotly_chart(fig_elec_kwh, use_container_width=True)
+            
+        with col_right:
+            fig_elec_eur = px.bar(
+                sub_elec, x='Mesiac', y='Naklad_EUR', color='Odberne_Miesto', barmode='group',
+                title="Mesačné náklady (€)", labels={'Naklad_EUR': 'Náklady (€)', 'Mesiac': 'Mesiac'}
+            )
+            fig_elec_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
+            st.plotly_chart(fig_elec_eur, use_container_width=True)
+    else:
+        st.info("Prosím, vyberte aspoň jedno odberné miesto.")
+
+    st.markdown("#### Tabuľkový prehľad spotreby a nákladov")
+    st.dataframe(filtered_elec, use_container_width=True)
+
+# ZÁLOŽKA 2: FOTOVOLTIKA
+with tab2:
+    st.subheader("Porovnanie výroby a úspor FVE: Poprad vs. Bratislava")
+    
+    col_left, col_right = st.columns(2)
+    with col_left:
+        fig_fve_kwh = px.bar(
+            filtered_fve, x='Mesiac', y='Vyroba_kWh', color='Lokalita', barmode='group',
+            title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'}
+        )
+        fig_fve_kwh.update_xaxes(categoryorder='array', categoryarray=month_order)
+        st.plotly_chart(fig_fve_kwh, use_container_width=True)
+        
+    with col_right:
+        fig_fve_eur = px.line(
+            filtered_fve, x='Mesiac', y='Uspora_EUR', color='Lokalita', markers=True,
+            title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'}
+        )
+        fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
+        st.plotly_chart(fig_fve_eur, use_container_width=True)
+
+    st.markdown("### % Podiel FVE na celkovej spotrebe prevádzky")
+    fig_pct = px.bar(
+        filtered_fve, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita', barmode='group',
+        title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'}
+    )
+    fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
+    st.plotly_chart(fig_pct, use_container_width=True)
+
+    st.markdown("#### Detailné dáta FVE 2026")
+    st.dataframe(filtered_fve, use_container_width=True)
+
+# ZÁLOŽKA 3: JEDNOTKOVÁ CENA ZA 1 KWH
+with tab3:
+    st.subheader("Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh)")
+    st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach.")
+    
+    if not filtered_elec.empty:
+        fig_price_trend = px.line(
+            filtered_elec, 
+            x='Mesiac', 
+            y='Jednotkova_Cena_EUR_kWh', 
+            color='Odberne_Miesto', 
+            markers=True,
+            title="Vývoj ceny 1 kWh podľa odberných miest (€/kWh)",
+            labels={'Jednotkova_Cena_EUR_kWh': 'Cena (€/kWh)', 'Mesiac': 'Mesiac'}
+        )
+        fig_price_trend.update_xaxes(categoryorder='array', categoryarray=month_order)
+        fig_price_trend.update_yaxes(tickformat=".4f")
+        st.plotly_chart(fig_price_trend, use_container_width=True)
+
+    st.markdown("### Priemerná cena 1 kWh za vybrané obdobie")
+    
+    records_price = []
+    for om in filtered_elec['Odberne_Miesto'].unique():
+        sub = filtered_elec[filtered_elec['Odberne_Miesto'] == om]
+        tot_kwh = sub['Spotreba_kWh'].sum()
+        tot_eur = sub['Naklad_EUR'].sum()
+        avg_p = (tot_eur / tot_kwh) if tot_kwh > 0 else 0.0
+        records_price.append({
+            'Odberné miesto': om,
+            'Celková spotreba (kWh)': tot_kwh,
+            'Celkové náklady (€)': tot_eur,
+            'Priemerná cena (€/kWh)': avg_p
+        })
+    df_price_table = pd.DataFrame(records_price)
+    
+    if not df_price_table.empty:
+        st.dataframe(
+            df_price_table.style.format({
+                'Celková spotreba (kWh)': '{:,.0f}',
+                'Celkové náklady (€)': '{:,.2f} €',
+                'Priemerná cena (€/kWh)': '{:.4f} €'
+            }),
+            use_container_width=True
+        )
+    else:
+        st.info("Nie sú k dispozícii žiadne dáta pre vybrané filtre.")
