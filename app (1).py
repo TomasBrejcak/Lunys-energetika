@@ -12,10 +12,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- LOGO A HLAVIČKA V SIDEBARE ---
-st.sidebar.header("📁 Vstupné dáta")
-
-# Overenie, či existuje nahraté logo (SVG, PNG, JPG)
+# --- LOGO V SIDEBARE ---
 if os.path.exists("logo.svg"):
     st.sidebar.image("logo.svg", width=220)
 elif os.path.exists("logo.png"):
@@ -25,12 +22,15 @@ elif os.path.exists("logo.jpg"):
 else:
     st.sidebar.markdown("### LUNYS, s.r.o.")
 
+st.sidebar.divider()
+
 st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov a úspor z fotovoltických elektrární (Poprad & Bratislava).")
 
 @st.cache_data
-def load_data(file):
-    xls = pd.ExcelFile(file)
+def load_data():
+    file_path = "Spotreby energií.xlsx"
+    xls = pd.ExcelFile(file_path)
     
     # 1. Načítanie FVE dáta 2026
     df_fve_raw = pd.read_excel(xls, sheet_name='Prehľad po FVE.2026')
@@ -81,20 +81,13 @@ def load_data(file):
     elec_df = pd.DataFrame(records)
     return fve_df, elec_df
 
-uploaded_file = st.sidebar.file_uploader("Nahrať súbor Spotreby energií.xlsx", type=["xlsx"])
+try:
+    fve_df, elec_df = load_data()
+except Exception as e:
+    st.error(f"Chyba pri načítaní Excel súboru: {e}")
+    st.stop()
 
-if uploaded_file is not None:
-    fve_df, elec_df = load_data(uploaded_file)
-    st.sidebar.success("Vlastný súbor načítaný!")
-else:
-    try:
-        fve_df, elec_df = load_data("Spotreby energií.xlsx")
-        st.sidebar.info("📌 Zobrazené sú aktuálne dáta za rok 2026 zo súboru.")
-    except Exception:
-        st.sidebar.warning("📌 Nahraj súbor Excel s dátami v sidebare.")
-        st.stop()
-
-# Filtre
+# Filtre v sidebare
 st.sidebar.subheader("🔍 Filtre")
 selected_months = st.sidebar.multiselect("Vyber mesiace", options=fve_df['Mesiac'].unique(), default=fve_df['Mesiac'].unique())
 
