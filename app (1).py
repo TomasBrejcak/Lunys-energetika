@@ -211,10 +211,45 @@ with tab1:
     st.markdown("#### Tabuľkový prehľad spotreby a nákladov")
     st.dataframe(filtered_elec, use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 2: FOTOVOLTIKA (GRAFY POD SEBOU)
+# ZÁLOŽKA 2: FOTOVOLTIKA (SÚHRN + GRAFY POD SEBOU)
 with tab2:
-    st.subheader("Porovnanie výroby a úspor FVE: Poprad vs. Bratislava")
+    st.subheader("☀️ Celkový sumár a porovnanie FVE: Poprad vs. Bratislava")
     
+    # Agregované dáta celkovo za zvolené obdobie pre lokality
+    summary_fve = filtered_fve.groupby('Lokalita_raw').agg({
+        'Vyroba_kWh': 'sum',
+        'Uspora_EUR': 'sum',
+        'Podiel_Pokrytia_Pct': 'mean'
+    }).reset_index()
+
+    # Horná súhrnná sekcija (metriky / koláčový resp. porovnávací prehľad)
+    col_sum1, col_sum2 = st.columns(2)
+    
+    with col_sum1:
+        # Súhrnný koláčový/donut graf podielu výroby FVE medzi Popradom a Bratislavou
+        fig_pie_kwh = px.pie(
+            summary_fve, names='Lokalita_raw', values='Vyroba_kWh',
+            title="Podiel lokalít na celkovej výrobe FVE (kWh)",
+            hole=0.4, template="plotly_dark"
+        )
+        fig_pie_kwh.update_traces(textinfo='percent+label', textfont=dict(size=16, color='white'))
+        fig_pie_kwh.update_layout(font=dict(size=14))
+        st.plotly_chart(fig_pie_kwh, use_container_width=True)
+        
+    with col_sum2:
+        # Súhrnný koláčový/donut graf podielu finančných úspor
+        fig_pie_eur = px.pie(
+            summary_fve, names='Lokalita_raw', values='Uspora_EUR',
+            title="Podiel lokalít na finančných úsporách (€)",
+            hole=0.4, template="plotly_dark"
+        )
+        fig_pie_eur.update_traces(textinfo='percent+label', textfont=dict(size=16, color='white'))
+        fig_pie_eur.update_layout(font=dict(size=14))
+        st.plotly_chart(fig_pie_eur, use_container_width=True)
+
+    st.divider()
+    st.subheader("Mesačný vývoj a detailné porovnanie")
+
     df_kwh = filtered_fve.copy()
     df_eur = filtered_fve.copy()
     df_pct = filtered_fve.copy()
@@ -235,7 +270,7 @@ with tab2:
     fig_fve_kwh = px.bar(
         df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
         text='Vyroba_kWh',
-        title="☀️ Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'},
+        title="Mesačná výroba FVE (kWh)", labels={'Vyroba_kWh': 'Výroba (kWh)', 'Mesiac': 'Mesiac'},
         template="plotly_dark", height=500
     )
     fig_fve_kwh.update_traces(texttemplate='%{text:,.0f} kWh', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
@@ -249,7 +284,7 @@ with tab2:
     fig_fve_eur = px.bar(
         df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
         text='Uspora_EUR',
-        title="💰 Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'},
+        title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'},
         template="plotly_dark", height=500
     )
     fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
@@ -263,7 +298,7 @@ with tab2:
     fig_pct = px.bar(
         df_pct, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita_FVE', barmode='group',
         text='Podiel_Pokrytia_Pct',
-        title="📈 Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'},
+        title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'},
         template="plotly_dark", height=500
     )
     fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=18, color='white', family="Arial Black"))
