@@ -476,10 +476,8 @@ if not filtered_elec.empty:
 # --- BEZPEČNÝ VÝPOČET KPI SÚHRNOV (ZABRÁNENIE DUPLICITNÉMU SČÍTANIU TRAFA A PODRUŽNÝCH MERANÍ) ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
-    # Ak je označená Trafostanica PEBEK, vynecháme jej podružné merania z hlavného KPI súhrnu, aby sa nezrátavali dvakrát
     if "Trafostanica PEBEK" in kpi_df['Odberné miesto'].values:
         kpi_df = kpi_df[~kpi_df['Odberné miesto'].isin(["Skladová hala I.", "Správa 99"])]
-    # Ak je označená Trafostanica HARAMIA, vynecháme jej podružné merania z hlavného KPI súhrnu
     if "Trafostanica HARAMIA" in kpi_df['Odberné miesto'].values:
         kpi_df = kpi_df[~kpi_df['Odberné miesto'].isin(["Bananáreň", "Zemiakareň"])]
 
@@ -664,4 +662,14 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
     else:
-        st.info("Pre vybrané od
+        st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania sa načítavajú z Excelu).")
+
+    st.divider()
+    st.markdown("### 📤 Nahranie ďalších PDF faktúr")
+    uploaded_files = st.file_uploader("Pridaj ďalšie PDF faktúry:", type=["pdf"], accept_multiple_files=True, key="uploader_bottom")
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+        st.success(f"Úspešne uložených {len(uploaded_files)} súborov do `{INVOICE_DIR}`. Obnov stránku.")
