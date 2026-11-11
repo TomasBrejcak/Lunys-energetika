@@ -306,7 +306,7 @@ for f in all_pdf_files:
             'Odberné miesto': res['Odberné miesto'],
             'Spotreba (kWh)': res['Spotreba (kWh)'],
             'Náklady (€)': res['Spolu bez DPH (€)'],
-            'Cena (€/kWh)': (res['Spolu bez DPH (€)'] / res['Spotreba (kWh)']) if res['Spotreba (kWh) > 0 else 0.0,
+            'Cena (€/kWh)': (res['Spolu bez DPH (€)'] / res['Spotreba (kWh)']) if res['Spotreba (kWh)'] > 0 else 0.0,
             'Číslo faktúry (VS)': res['Číslo faktúry (VS)'],
             'Fakturačné obdobie': res['Fakturačné obdobie'],
             '_sort_date': res['_sort_date'],
@@ -345,7 +345,7 @@ all_possible_oms = sorted(elec_df['Odberné miesto'].unique()) if not elec_df.em
 if 'selected_oms' not in st.session_state:
     st.session_state.selected_oms = all_possible_oms
 
-# --- SIDEBAR: HIERARCHICKÝ EXCEL FILTER (PEBEK -> Skladová hala I., Správa 99 | HARAMIA -> Bananáreň, Zemiakareň) ---
+# --- SIDEBAR: HIERARCHICKÝ EXCEL FILTER ---
 st.sidebar.subheader("🏢 Výber odberných miest")
 
 if all_possible_oms:
@@ -357,10 +357,8 @@ if all_possible_oms:
 
     updated_oms = []
     
-    # 1. LOKALITA POPRAD S HIERARCHIOU TRAFOSTANÍC
     st.sidebar.markdown("**📍 Poprad**")
     
-    # Skupina Trafostanica PEBEK (vrátane podružných Skladová hala I. a Správa 99)
     pebek_group = ["Trafostanica PEBEK", "Skladová hala I.", "Správa 99"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica PEBEK (Vstup)**")
     for om in pebek_group:
@@ -369,7 +367,6 @@ if all_possible_oms:
             if is_checked:
                 updated_oms.append(om)
 
-    # Skupina Trafostanica HARAMIA (vrátane podružných Bananáreň a Zemiakareň)
     haramia_group = ["Trafostanica HARAMIA", "Bananáreň", "Zemiakareň"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica HARAMIA (Vstup)**")
     for om in haramia_group:
@@ -378,14 +375,12 @@ if all_possible_oms:
             if is_checked:
                 updated_oms.append(om)
 
-    # Ostatné miesta v Poprade (Beňovský, Nájomcovia, atď.)
     other_poprad = [om for om in all_possible_oms if om not in pebek_group and om not in haramia_group and om in elec_df[elec_df['Lokalita'] == 'Poprad']['Odberné miesto'].values]
     for om in other_poprad:
         is_checked = st.sidebar.checkbox(f"&nbsp;&nbsp;&nbsp;&nbsp;• {om}", value=om in st.session_state.selected_oms, key=f"cb_om_{om}")
         if is_checked:
             updated_oms.append(om)
 
-    # 2. LOKALITA BRATISLAVA
     bratislava_oms = [om for om in all_possible_oms if om in elec_df[elec_df['Lokalita'] == 'Bratislava']['Odberné miesto'].values]
     if bratislava_oms:
         st.sidebar.markdown("**📍 Bratislava**")
