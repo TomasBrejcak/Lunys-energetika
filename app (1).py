@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import os
+import re
+import pdfplumber
 
 # Nastavenie stránky
 st.set_page_config(
@@ -26,6 +28,84 @@ st.sidebar.divider()
 
 st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
+
+# --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS ---
+EIC_MAP = {
+    "24ZVS00007394912": {"nazov": "Trafostanica PEBEK", "lokalita": "Poprad"},
+    "24ZZS4000182286S": {"nazov": "Trafo Bratislava", "lokalita": "Bratislava"},
+    "24ZVS0000016878H": {"nazov": "Beňovský Apartments", "lokalita": "Poprad"},
+    "24ZVS0000059036Q": {"nazov": "Areál / Nájomcovia (Poprad)", "lokalita": "Poprad"},
+    "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
+}
+
+# --- FUNKCIA PRE AUTOMATICKÉ PARSOVANIE ZSE PDF FAKTÚRY ---
+def parse_zse_pdf(pdf_file):
+    with pdfplumber.open(pdf_file) as pdf:
+        text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+
+    # 1. Detekcia EIC kódu
+    eic_match = re.search(r'24Z[A-Z0-9]{13}', text)
+    eic_code = eic_match.group(0) if eic_match else "Neznáme EIC"
+    om_info = EIC_MAP.get(eic_code, {"nazov": f"Neznáme odberné miesto ({eic_code})", "lokalita": "Neznáma"})
+
+    # 2. Detekcia čísla faktúry a obdobia
+    vs_match = re.search(r'Vyúčtovacia faktúra za elektrinu č\.\s*(\d+)', text)
+    vs_num = vs_match.group(1) if vs_match else "Neuvedené"
+
+    obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
+    obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
+
+    # 3. Silová zložka (Komodita)
+    silova_kwh_m = re.search(r'1T za elektrinu\s*([\d\s,]+)\s*kWh', text)
+    silova_eur_m = re.search(r'1T za elektrinu\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*([\d\s,]+)', text)
+    
+    silova_kwh = float(silova_kwh_m.group(1).replace(" ", "").replace(",", ".")) if silova_kwh_m else 0.0
+    silova_eur = float(silova_eur_m.group(1).replace(" ", "").replace(",", ".")) if silova_eur_m else 0.0
+
+    # 4. Distribúcia celkom
+    distribucia_m = re.search(r'Služba:\s*Distribúcia.*?Spolu bez DPH\s*([\d\s,]+)\s*€', text, re.DOTALL)
+    distribucia_eur = float(distribucia_m.group(1).replace(" ", "").replace(",", ".")) if distribucia_m else 0.0
+
+    # 5. Detailné distribučné a regulované položky
+    def extract_val(pattern):
+        m = re.search(pattern, text)
+        return float(m.group(1).replace(" ", "").replace(",", ".")) if m else 0.0
+
+    pevna_distr = extract_val(r'Pevná zložka tarify za distribúciu\s*[\d\s,]+\s*A\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+    var_distr = extract_val(r'Var\.zložka tarify za distr\.,vrát\.pren\.el\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+    straty_distr = extract_val(r'Tarifa za distribučné straty\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+    jadro_fon = extract_val(r'Tarifa za odvod do jadrového fondu\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+    sistem_sluzby = extract_val(r'Platba za systémové služby\s*-\s*pásmo 2\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+    prevadzka_sist = extract_val(r'Platba za prevádzkovanie systému\s*-\s*pásmo 2\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+
+    # 6. Pokuty a jalová elektrina
+    jalovina = extract_val(r'Nevyžiad\.dod\.kapacitnej zložky jal\.en\.\s*[\d\s,]+\s*kVArh\s*[\d\s,]+\s*[\d\s,]+\s*([\d\s,]+)')
+
+    # 7. Celkové sumy
+    spolu_bez_dph = extract_val(r'Spolu za združ\.dod\.elektriny\s*([\d\s,]+)\s*19,00')
+    dph = extract_val(r'Spolu za združ\.dod\.elektriny\s*[\d\s,]+\s*19,00\s*([\d\s,]+)')
+    spolu_s_dph = extract_val(r'Spolu za združ\.dod\.elektriny\s*[\d\s,]+\s*19,00\s*[\d\s,]+\s*([\d\s,]+)')
+
+    return {
+        "EIC": eic_code,
+        "Odberné miesto": om_info["nazov"],
+        "Lokalita": om_info["lokalita"],
+        "Číslo faktúry (VS)": vs_num,
+        "Fakturačné obdobie": obdobie,
+        "Spotreba (kWh)": silova_kwh,
+        "Silová zložka (€)": silova_eur,
+        "Distribúcia celkom (€)": distribucia_eur,
+        "Pevná zložka (ističe) (€)": pevna_distr,
+        "Variabilná distribúcia (€)": var_distr,
+        "Distribučné straty (€)": straty_distr,
+        "Jadrový fond (€)": jadro_fon,
+        "Systémové služby (€)": sistem_sluzby,
+        "Prevádzkovanie systému (€)": prevadzka_sist,
+        "Jalová elektrina (€)": jalovina,
+        "Spolu bez DPH (€)": spolu_bez_dph if spolu_bez_dph > 0 else (silova_eur + distribucia_eur),
+        "DPH (€)": dph,
+        "Spolu s DPH (€)": spolu_s_dph
+    }
 
 @st.cache_data
 def load_data():
@@ -71,7 +151,6 @@ def load_data():
         if "spotreba" in combined_text.lower():
             raw_lower = combined_text.lower()
             
-            # Automatické priradenie lokality pre elektro dáta (Poprad vs Bratislava)
             if "feld" in raw_lower or "bratislava" in raw_lower:
                 clean_name = "Bratislava – Trafo Feld"
                 lokalita_parent = "Bratislava"
@@ -134,13 +213,11 @@ except Exception as e:
 # --- FILTRE V SIDEBARE ---
 st.sidebar.subheader("🔍 Filtre")
 
-# 1. Výber lokality
 selected_lokalita = st.sidebar.selectbox(
     "📍 Vyber lokalitu",
     options=["Všetky lokality", "Poprad", "Bratislava"]
 )
 
-# 2. Výber mesiacov
 month_order = list(fve_df['Mesiac'].unique())
 selected_months = st.sidebar.multiselect(
     "📅 Vyber mesiace", 
@@ -161,7 +238,7 @@ filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=mon
 filtered_fve = filtered_fve.sort_values('Mesiac')
 filtered_elec = filtered_elec.sort_values('Mesiac')
 
-# Kľúčové ukazovatele za vybraný filter
+# Kľúčové ukazovatele
 total_elec_kwh = filtered_elec['Spotreba (kWh)'].sum()
 total_elec_eur = filtered_elec['Náklady (€)'].sum()
 avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
@@ -180,11 +257,12 @@ c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
 
 st.divider()
 
-# Definícia záložiek
-tab1, tab2, tab3 = st.tabs([
+# DEFINÍCIA 4 ZÁLOŽIEK (PRIDANÁ ZÁLOŽKA PRE FAKTÚRY)
+tab1, tab2, tab3, tab4 = st.tabs([
     "📉 Spotreby & Náklady Odberných Miest", 
     "☀️ Výkon Fotovoltiky (FVE)", 
-    "💶 Jednotková cena za 1 kWh"
+    "💶 Jednotková cena za 1 kWh",
+    "📄 Analýza PDF Faktúr (ZSE)"
 ])
 
 # ZÁLOŽKA 1: SPOTREBY A NÁKLADY
@@ -228,7 +306,7 @@ with tab1:
     st.markdown("#### Tabuľkový prehľad spotreby a nákladov")
     st.dataframe(filtered_elec, use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 2: FOTOVOLTIKA (SÚHRN + GRAFY POD SEBOU)
+# ZÁLOŽKA 2: FOTOVOLTIKA
 with tab2:
     st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})")
     
@@ -292,7 +370,6 @@ with tab2:
     df_eur['Lokalita_FVE'] = lbl_eur
     df_pct['Lokalita_FVE'] = lbl_pct
 
-    # 1. GRAF: Mesačná výroba FVE
     fig_fve_kwh = px.bar(
         df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
         text='Vyroba_kWh',
@@ -306,7 +383,6 @@ with tab2:
 
     st.divider()
 
-    # 2. GRAF: Finančná úspora FVE
     fig_fve_eur = px.bar(
         df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
         text='Uspora_EUR',
@@ -320,7 +396,6 @@ with tab2:
 
     st.divider()
 
-    # 3. GRAF: % Podiel FVE
     fig_pct = px.bar(
         df_pct, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita_FVE', barmode='group',
         text='Podiel_Pokrytia_Pct',
@@ -338,7 +413,6 @@ with tab2:
 # ZÁLOŽKA 3: JEDNOTKOVÁ CENA ZA 1 KWH
 with tab3:
     st.subheader(f"Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh) – {selected_lokalita}")
-    st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach.")
     
     if not filtered_elec.empty:
         fig_price_trend = px.line(
@@ -382,5 +456,73 @@ with tab3:
             use_container_width=True,
             hide_index=True
         )
-    else:
-        st.info("Nie sú k dispozícii žiadne dáta pre vybrané filtre.")
+
+# ZÁLOŽKA 4: AUTOMATICKÉ PARSOVANIE PDF FAKTÚR (NOVINKA)
+with tab4:
+    st.subheader("📄 Automatická analýza a parsovanie ZSE faktúr z PDF")
+    st.markdown("Nahrajte jednu alebo viaceré vyúčtovacie PDF faktúry od ZSE. Systém automaticky zistí EIC kód, priradí odberné miesto a rozbije sumu na silovú zložku, distribúciu a poplatky.")
+
+    uploaded_files = st.file_uploader(
+        "Sem pretiahnite PDF faktúry (zse_faktura.pdf):", 
+        type=["pdf"], 
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        parsed_results = []
+        for pdf_file in uploaded_files:
+            try:
+                data = parse_zse_pdf(pdf_file)
+                parsed_results.append(data)
+            except Exception as e:
+                st.error(f"Chyba pri spracovaní súboru {pdf_file.name}: {e}")
+
+        if parsed_results:
+            df_invoices = pd.DataFrame(parsed_results)
+            st.success(f"Úspešne spracovaných faktúr: {len(df_invoices)}")
+            
+            # Zobrazenie výslednej prehľadnej tabuľky
+            st.markdown("### 📊 Extrahované údaje z faktúr")
+            st.dataframe(df_invoices, use_container_width=True, hide_index=True)
+
+            st.divider()
+            
+            # Vizuálny rozpad nákladov pre prvú nahrávanú faktúru (alebo agregát)
+            st.markdown("### 🔍 Štruktúra nákladov faktúry (Silová zložka vs. Distribúcia a poplatky)")
+            
+            for idx, row in df_invoices.iterrows():
+                st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
+                
+                c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+                c_f1.metric("Spotreba elektriny", f"{row['Spotreba (kWh)']:,.0f} kWh")
+                c_f2.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
+                c_f3.metric("Distribúcia & Poplatky", f"{row['Distribúcia celkom (€)']:,.2f} €")
+                
+                jal_val = row['Jalová elektrina (€)']
+                c_f4.metric("Jalová elektrina / Pokuty", f"{jal_val:,.2f} €", delta_color="inverse" if jal_val > 0 else "normal")
+
+                # Koláčový graf rozpadu položiek danej faktúry
+                cost_breakdown = {
+                    "Silová zložka": row['Silová zložka (€)'],
+                    "Pevná zložka (ističe/kapacita)": row['Pevná zložka (ističe) (€)'],
+                    "Variabilná distribúcia": row['Variabilná distribúcia (€)'],
+                    "Distribučné straty": row['Distribučné straty (€)'],
+                    "Jadrový fond": row['Jadrový fond (€)'],
+                    "Systémové služby": row['Systémové služby (€)'],
+                    "Prevádzkovanie systému": row['Prevádzkovanie systému (€)'],
+                    "Jalová elektrina": row['Jalová elektrina (€)']
+                }
+                
+                df_break = pd.DataFrame([
+                    {"Položka": k, "Suma (€)": v} for k, v in cost_breakdown.items() if v > 0
+                ])
+
+                fig_break = px.pie(
+                    df_break, names='Položka', values='Suma (€)',
+                    title=f"Podiel jednotlivých zložiek na cene bez DPH ({row['Odberné miesto']})",
+                    hole=0.4, template="plotly_dark"
+                )
+                fig_break.update_traces(textinfo='percent+label', textfont=dict(size=14, color='white'))
+                fig_break.update_layout(font=dict(size=14))
+                st.plotly_chart(fig_break, use_container_width=True)
+                st.divider()
