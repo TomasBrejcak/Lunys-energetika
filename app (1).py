@@ -463,6 +463,16 @@ elif selected_tab == TAB_NAMES[2]:
                 df_inv_prices = df_inv_prices[df_inv_prices['Lokalita'] == selected_lokalita]
 
             if not df_inv_prices.empty:
+                # --- FILTER ODBERNÉHO MIESTA AJ V TEJTO ZÁLOŽKE ---
+                st.markdown("### 🔍 Filter pre detailné zobrazenie")
+                unique_oms_spot = ["Všetky odberné miesta"] + list(df_inv_prices['Odberné miesto'].unique())
+                selected_spot_om = st.selectbox("Vyber odberné miesto pre spotové ceny:", options=unique_oms_spot, key="spot_om_selectbox")
+
+                if selected_spot_om != "Všetky odberné miesta":
+                    df_inv_prices = df_inv_prices[df_inv_prices['Odberné miesto'] == selected_spot_om].copy()
+
+                st.divider()
+
                 # ==========================================
                 # KOLÁČOVÉ GRAFY NA ÚVOD: AKO SI VEDIA ODBERNÉ MIESTA
                 # ==========================================
