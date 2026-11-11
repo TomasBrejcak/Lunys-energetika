@@ -443,7 +443,6 @@ elif selected_tab == TAB_NAMES[2]:
                 df_inv_prices['Cena sila (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Silová zložka (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
                 df_inv_prices['Cena celkom s distribúciou (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Spolu bez DPH (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
 
-                # Stabilné vykreslenie vývoja cien pomocou Plotly go.Scatter
                 fig_spot_trend = go.Figure()
                 if '_sort_date' in df_inv_prices.columns:
                     df_inv_prices = df_inv_prices.sort_values('_sort_date')
@@ -527,6 +526,57 @@ elif selected_tab == TAB_NAMES[3]:
 
         st.divider()
 
+        # --- VRÁTENÉ GRAFY ANALÝZY FAKTÚR ---
+        st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií z faktúr")
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            tot_silova = df_filtered_inv['Silová zložka (€)'].sum()
+            tot_distrib = df_filtered_inv['Distribúcia celkom (€)'].sum()
+            sum_cost_total = tot_silova + tot_distrib
+            
+            df_pie_cost = pd.DataFrame({
+                'Zložka': [f"Silová zložka ({tot_silova:,.2f} €)", f"Distribúcia celkom ({tot_distrib:,.2f} €)"],
+                'Suma': [tot_silova, tot_distrib]
+            })
+            
+            fig_pie1 = px.pie(
+                df_pie_cost, names='Zložka', values='Suma', hole=0.4,
+                title="Podiel nákladov: Silová zložka vs. Distribúcia",
+                template="plotly_dark"
+            )
+            fig_pie1.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie1, use_container_width=True)
+            st.markdown(f"**Spolu náklady: {sum_cost_total:,.2f} €**")
+
+        with col_g2:
+            tot_rk = df_filtered_inv['Prekročenie RK (€)'].sum()
+            tot_mrk = df_filtered_inv['Prekročenie MRK (€)'].sum()
+            tot_jalova = df_filtered_inv['Jalová elektrina (€)'].sum()
+            tot_ucinnik = df_filtered_inv['Prirážka za účinník (€)'].sum()
+            sum_penalties_total = tot_rk + tot_mrk + tot_jalova + tot_ucinnik
+            
+            df_pie_penalties = pd.DataFrame({
+                'Typ sankcie': [
+                    f"Prekročenie RK ({tot_rk:,.2f} €)",
+                    f"Prekročenie MRK ({tot_mrk:,.2f} €)", 
+                    f"Jalová elektrina ({tot_jalova:,.2f} €)", 
+                    f"Prirážka za účinník ({tot_ucinnik:,.2f} €)"
+                ],
+                'Suma': [tot_rk, tot_mrk, tot_jalova, tot_ucinnik]
+            })
+            
+            fig_pie2 = px.pie(
+                df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
+                title="Súhrn pokút a sankcií",
+                template="plotly_dark"
+            )
+            fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie2, use_container_width=True)
+            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
+
+        st.divider()
+
         st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
         display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac", "Raw_Data"]]
         st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
@@ -554,7 +604,7 @@ elif selected_tab == TAB_NAMES[3]:
             c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
             c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
 
-            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúry {row['Číslo faktúry (VS)']}"):
+            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
                 st.text(row['Raw_Text'])
 
             st.divider()
