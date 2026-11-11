@@ -443,22 +443,37 @@ elif selected_tab == TAB_NAMES[2]:
                 df_inv_prices['Cena sila (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Silová zložka (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
                 df_inv_prices['Cena celkom s distribúciou (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Spolu bez DPH (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
 
-                id_vars_list = [col for col in ['Odberné miesto', 'Fakturačné obdobie'] if col in df_inv_prices.columns]
-                val_vars_list = [col for col in ['Cena sila (€/kWh)', 'Cena celkom s distribúciou (€/kWh)'] if col in df_inv_prices.columns]
+                # Stabilné vykreslenie vývoja cien pomocou Plotly go.Scatter
+                fig_spot_trend = go.Figure()
+                if '_sort_date' in df_inv_prices.columns:
+                    df_inv_prices = df_inv_prices.sort_values('_sort_date')
 
-                if id_vars_list and val_vars_list:
-                    df_melt_price = df_inv_prices.melt(
-                        id_vars=id_vars_list,
-                        value_vars=val_vars_list,
-                        var_name='Typ ceny', value_name='Cena (€/kWh)'
-                    )
+                for om in df_inv_prices['Odberné miesto'].unique():
+                    sub_om = df_inv_prices[df_inv_prices['Odberné miesto'] == om]
+                    
+                    fig_spot_trend.add_trace(go.Scatter(
+                        x=sub_om['Fakturačné obdobie'],
+                        y=sub_om['Cena sila (€/kWh)'],
+                        mode='lines+markers',
+                        name=f"{om} – Sila (€/kWh)"
+                    ))
+                    
+                    fig_spot_trend.add_trace(go.Scatter(
+                        x=sub_om['Fakturačné obdobie'],
+                        y=sub_om['Cena celkom s distribúciou (€/kWh)'],
+                        mode='lines+markers',
+                        name=f"{om} – Celkom s distribúciou",
+                        line=dict(dash='dash')
+                    ))
 
-                    fig_spot_trend = px.line(
-                        df_melt_price, x='Fakturačné obdobie', y='Cena (€/kWh)', color='Odberné miesto', line_dash='Typ ceny',
-                        markers=True, title="Mesačný vývoj spotovej ceny komodity vs. reálnej ceny s distribúciou (€/kWh)",
-                        template="plotly_dark"
-                    )
-                    st.plotly_chart(fig_spot_trend, use_container_width=True)
+                fig_spot_trend.update_layout(
+                    title="Mesačný vývoj spotovej ceny komodity vs. reálnej ceny s distribúciou (€/kWh)",
+                    xaxis_title="Fakturačné obdobie",
+                    yaxis_title="Cena (€/kWh)",
+                    template="plotly_dark",
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig_spot_trend, use_container_width=True)
 
                 st.markdown("### 📋 Súhrnné reálne ceny za 1 kWh podľa odberných miest")
                 summary_spot = []
@@ -539,7 +554,7 @@ elif selected_tab == TAB_NAMES[3]:
             c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
             c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
 
-            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
+            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúry {row['Číslo faktúry (VS)']}"):
                 st.text(row['Raw_Text'])
 
             st.divider()
