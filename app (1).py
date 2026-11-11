@@ -463,47 +463,18 @@ elif selected_tab == TAB_NAMES[2]:
                 df_inv_prices = df_inv_prices[df_inv_prices['Lokalita'] == selected_lokalita]
 
             if not df_inv_prices.empty:
-                # --- FILTER ODBERNÉHO MIESTA AJ V TEJTO ZÁLOŽKE ---
-                st.markdown("### 🔍 Filter pre detailné zobrazenie")
-                unique_oms_spot = ["Všetky odberné miesta"] + list(df_inv_prices['Odberné miesto'].unique())
-                selected_spot_om = st.selectbox("Vyber odberné miesto pre spotové ceny:", options=unique_oms_spot, key="spot_om_selectbox")
+                # --- MULTISELECT PRE ODBERNÉ MIESTA (ZODPOVEDÁ PRVEJ ZÁLOŽKE) ---
+                st.markdown("### 🔍 Filter odberných miest pre porovnanie")
+                all_om_spot = list(df_inv_prices['Odberné miesto'].unique())
+                selected_spot_oms = st.multiselect(
+                    "Vyber odberné miesta pre porovnanie v grafoch:",
+                    options=all_om_spot,
+                    default=all_om_spot,
+                    key="spot_om_multiselect"
+                )
 
-                if selected_spot_om != "Všetky odberné miesta":
-                    df_inv_prices = df_inv_prices[df_inv_prices['Odberné miesto'] == selected_spot_om].copy()
-
-                st.divider()
-
-                # ==========================================
-                # KOLÁČOVÉ GRAFY NA ÚVOD: AKO SI VEDIA ODBERNÉ MIESTA
-                # ==========================================
-                st.markdown("### 📊 Úvodný prehľad odberných miest (zo ZSE faktúr)")
-                om_summary_agg = df_inv_prices.groupby('Odberné miesto').agg({
-                    'Spotreba (kWh)': 'sum',
-                    'Spolu bez DPH (€)': 'sum'
-                }).reset_index()
-
-                col_u1, col_u2 = st.columns(2)
-                with col_u1:
-                    fig_om_kwh = px.pie(
-                        om_summary_agg, names='Odberné miesto', values='Spotreba (kWh)', hole=0.4,
-                        title="Podiel odberných miest na celkovej spotrebe (kWh)",
-                        template="plotly_dark"
-                    )
-                    fig_om_kwh.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
-                    st.plotly_chart(fig_om_kwh, use_container_width=True)
-                    tot_kwh_sum = om_summary_agg['Spotreba (kWh)'].sum()
-                    st.markdown(f"**Celková spotreba: {tot_kwh_sum:,.0f} kWh**")
-
-                with col_u2:
-                    fig_om_eur = px.pie(
-                        om_summary_agg, names='Odberné miesto', values='Spolu bez DPH (€)', hole=0.4,
-                        title="Podiel odberných miest na celkových nákladoch (€)",
-                        template="plotly_dark"
-                    )
-                    fig_om_eur.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
-                    st.plotly_chart(fig_om_eur, use_container_width=True)
-                    tot_eur_sum = om_summary_agg['Spolu bez DPH (€)'].sum()
-                    st.markdown(f"**Celkové náklady bez DPH: {tot_eur_sum:,.2f} €**")
+                if selected_spot_oms:
+                    df_inv_prices = df_inv_prices[df_inv_prices['Odberné miesto'].isin(selected_spot_oms)].copy()
 
                 st.divider()
 
@@ -568,13 +539,18 @@ elif selected_tab == TAB_NAMES[3]:
             df_invoices = pd.DataFrame(parsed_results)
             df_invoices = df_invoices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
 
-            # 1. FILTER ODBERNÝCH MIEST NA ÚPLNOM VRCHU
+            # --- MULTISELECT PRE ANALÝZU FAKTÚR ---
             st.markdown("### 🔍 Filter odberných miest pre analýzu")
-            unique_oms = ["Všetky odberné miesta"] + list(df_invoices['Odberné miesto'].unique())
-            selected_single_om = st.selectbox("Vyber konkrétne odberné miesto:", options=unique_oms)
+            all_om_inv = list(df_invoices['Odberné miesto'].unique())
+            selected_inv_oms = st.multiselect(
+                "Vyber odberné miesta pre analýzu faktúr:",
+                options=all_om_inv,
+                default=all_om_inv,
+                key="inv_om_multiselect"
+            )
 
-            if selected_single_om != "Všetky odberné miesta":
-                df_filtered_inv = df_invoices[df_invoices['Odberné miesto'] == selected_single_om].copy()
+            if selected_inv_oms:
+                df_filtered_inv = df_invoices[df_invoices['Odberné miesto'].isin(selected_inv_oms)].copy()
             else:
                 df_filtered_inv = df_invoices.copy()
 
@@ -583,7 +559,7 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
 
-            # 2. KOLÁČOVÉ GRAFY POD FILTROM (ČISTÉ POPISKY + TUČNÉ SUMY)
+            # KOLÁČOVÉ GRAFY POD FILTROM (ČISTÉ POPISKY + TUČNÉ SUMY)
             st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií")
             col_g1, col_g2 = st.columns(2)
             
@@ -634,14 +610,14 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
 
-            # 3. TABUĽKA S DÁTAMI Z FAKTÚR
+            # TABUĽKA S DÁTAMI Z FAKTÚR
             st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
             display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac"]]
             st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
 
             st.divider()
 
-            # 4. MOŽNOSŤ NAHRAŤ ĎALŠIE FAKTÚRY
+            # MOŽNOSŤ NAHRAŤ ĎALŠIE FAKTÚRY
             st.markdown("### 📤 Nahranie ďalších PDF faktúr")
             uploaded_files = st.file_uploader("Pridaj ďalšie PDF faktúry:", type=["pdf"], accept_multiple_files=True, key="uploader_bottom")
             if uploaded_files:
@@ -653,7 +629,7 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
 
-            # 5. DETAIL PO MESIACOCH (KARTY FAKTÚR)
+            # DETAIL PO MESIACOCH (KARTY FAKTÚR)
             st.markdown("### 🔎 Detail faktúr podľa mesiacov")
             for idx, row in df_filtered_inv.iterrows():
                 st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
@@ -689,7 +665,7 @@ elif selected_tab == TAB_NAMES[3]:
 
                 st.divider()
 
-            # 6. TABUĽKA KRÍŽOVEJ KONTROLY (PDF vs EXCEL) NA ÚPLNOM KONCI
+            # TABUĽKA KRÍŽOVEJ KONTROLY (PDF vs EXCEL) NA ÚPLNOM KONCI
             st.markdown("### 🔍 Krížová kontrola (PDF vs. Excel)")
             st.markdown("Porovnanie nákladov bez DPH vyťažených z nahratých PDF faktúr oproti hodnotám zapísaným v Exceli (`Spotreby energií.xlsx`).")
 
