@@ -251,6 +251,8 @@ def load_excel_data():
                     clean_name = "Zemiakareň"
                 elif "správa 99" in raw_lower or "sprava 99" in raw_lower or "ab správa" in raw_lower:
                     clean_name = "Správa 99"
+                elif "skladová hala" in raw_lower or "skladova hala" in raw_lower:
+                    clean_name = "Skladová hala I."
                 elif "haramia" in raw_lower:
                     clean_name = "Trafostanica HARAMIA"
                 elif "pebek" in raw_lower:
@@ -318,7 +320,7 @@ for f in all_pdf_files:
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
 # Spojenie dát
-subordinate_oms = ["Bananáreň", "Zemiakareň", "Správa 99"]
+subordinate_oms = ["Bananáreň", "Zemiakareň", "Správa 99", "Skladová hala I."]
 subordinate_from_excel = excel_elec_df[excel_elec_df['Odberné miesto'].isin(subordinate_oms)] if not excel_elec_df.empty else pd.DataFrame()
 
 if not pdf_elec_df.empty:
@@ -359,6 +361,7 @@ if all_possible_oms:
     
     st.sidebar.markdown("**📍 Poprad**")
     
+    # Skupina PEBEK (vrátane Skladovej haly I. a Správy 99)
     pebek_group = ["Trafostanica PEBEK", "Skladová hala I.", "Správa 99"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica PEBEK (Vstup)**")
     for om in pebek_group:
@@ -367,6 +370,7 @@ if all_possible_oms:
             if is_checked:
                 updated_oms.append(om)
 
+    # Skupina HARAMIA (vrátane Bananárne a Zemiakárne)
     haramia_group = ["Trafostanica HARAMIA", "Bananáreň", "Zemiakareň"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica HARAMIA (Vstup)**")
     for om in haramia_group:
