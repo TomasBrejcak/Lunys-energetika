@@ -66,7 +66,6 @@ def parse_zse_pdf(pdf_path_or_file):
     sort_date_str = f"{sort_date[2]}-{sort_date[1]}-{sort_date[0]}" if len(sort_date) == 3 else "0000-00-00"
 
     def get_line_cost(keywords):
-        """Vyťahuje sumu v EUR pre zoznam možných kľúčových slov s ochranou proti chybám"""
         if isinstance(keywords, str):
             keywords = [keywords]
         
@@ -105,18 +104,10 @@ def parse_zse_pdf(pdf_path_or_file):
     if silova_kwh == 0.0:
         silova_kwh = get_line_kwh('ČE 1T')
 
-    # Spoľahlivé vyhľadanie silovej zložky (komodity)
+    # Silová zložka
     silova_eur = get_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special'])
 
-    spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
-    spolu_bez_dph = 0.0
-    if spolu_match:
-        try:
-            spolu_bez_dph = float(spolu_match.group(1).replace(" ", "").replace(",", "."))
-        except:
-            pass
-
-    # Distribúcia celkom
+    # Distribúcia celkom (hľadáme sumu pod sekciou Distribúcia)
     distribucia_eur = 0.0
     distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
     if distrib_section:
@@ -130,18 +121,27 @@ def parse_zse_pdf(pdf_path_or_file):
             except:
                 pass
 
-    if distribucia_eur == 0.0 and spolu_bez_dph > 0 and silova_eur > 0:
-        distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
-
-    # Ak by silová zložka ostala 0, ale máme celkovú sumu a distribúciu, dopočítame ju
-    if silova_eur == 0.0 and spolu_bez_dph > 0 and distribucia_eur > 0:
-        silova_eur = max(0.0, spolu_bez_dph - distribucia_eur)
-
     # --- POKUTY A SANKČNÉ POLOŽKY ---
     mrk_prekrocenie = get_line_cost(['Tarifa za prekročenie MRK', 'Prekročenie rezervovanej kapacity', 'Prekročenie maximálnej rezervovanej kapacity'])
     jalovina = get_line_cost(['Dodávka jalovej elektriny', 'Nevyžiad.dod.kapacitnej zložky jal.en.'])
     ucinnik = get_line_cost('Prirážka za nedodržanie účinníka')
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
+
+    # Hľadanie reálnej celkovej sumy bez DPH zo sumy spolu za celú faktúru
+    spolu_bez_dph = 0.0
+    spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
+    if spolu_match:
+        try:
+            val = float(spolu_match.group(1).replace(" ", "").replace(",", "."))
+            if val < 100000:
+                spolu_bez_dph = val
+        except:
+            pass
+
+    # Ak suma spolu nesedí alebo sa nenašla, spočítame ju ako reálny súčet zložiek
+    calculated_total = silova_eur + distribucia_eur + celkove_pokuty
+    if spolu_bez_dph == 0.0 or abs(spolu_bez_dph - calculated_total) > 50.0:
+        spolu_bez_dph = calculated_total
 
     return {
         "EIC": eic_code,
