@@ -71,26 +71,30 @@ def load_data():
         if "spotreba" in combined_text.lower():
             raw_lower = combined_text.lower()
             
-            if "bananáreň" in raw_lower:
-                clean_name = "Bananáreň"
-            elif "zemiakareň" in raw_lower:
-                clean_name = "Zemiakareň"
-            elif "feld" in raw_lower or "bratislava" in raw_lower:
+            # Automatické priradenie lokality pre elektro dáta (Poprad vs Bratislava)
+            if "feld" in raw_lower or "bratislava" in raw_lower:
                 clean_name = "Bratislava – Trafo Feld"
-            elif "haramia" in raw_lower or "nové trafo" in raw_lower:
-                clean_name = "Trafostanica Haramia (Celkom)"
-            elif "pebek" in raw_lower or "staré trafo" in raw_lower:
-                clean_name = "Trafostanica Pebek (Celkom)"
-            elif "skladová hala" in raw_lower:
-                clean_name = "Skladová hala I."
-            elif "ab správa" in raw_lower:
-                clean_name = "AB Správa"
-            elif "beňovský" in raw_lower:
-                clean_name = "Beňovský Apartments"
-            elif "nájomcovia" in raw_lower or "arál" in raw_lower:
-                clean_name = "Hlavný elektromer / Nájomcovia"
+                lokalita_parent = "Bratislava"
             else:
-                clean_name = combined_text.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").strip().capitalize()
+                lokalita_parent = "Poprad"
+                if "bananáreň" in raw_lower:
+                    clean_name = "Bananáreň"
+                elif "zemiakareň" in raw_lower:
+                    clean_name = "Zemiakareň"
+                elif "haramia" in raw_lower or "nové trafo" in raw_lower:
+                    clean_name = "Trafostanica Haramia (Celkom)"
+                elif "pebek" in raw_lower or "staré trafo" in raw_lower:
+                    clean_name = "Trafostanica Pebek (Celkom)"
+                elif "skladová hala" in raw_lower:
+                    clean_name = "Skladová hala I."
+                elif "ab správa" in raw_lower:
+                    clean_name = "AB Správa"
+                elif "beňovský" in raw_lower:
+                    clean_name = "Beňovský Apartments"
+                elif "nájomcovia" in raw_lower or "arál" in raw_lower:
+                    clean_name = "Hlavný elektromer / Nájomcovia"
+                else:
+                    clean_name = combined_text.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").strip().capitalize()
             
             kwh_vals = pd.to_numeric(row.values[2:11], errors='coerce')
             
@@ -111,6 +115,7 @@ def load_data():
                 if k_val > 0 or e_val > 0:
                     records.append({
                         'Mesiac': m,
+                        'Lokalita': lokalita_parent,
                         'Odberné miesto': clean_name,
                         'Spotreba (kWh)': k_val,
                         'Náklady (€)': e_val,
@@ -126,25 +131,37 @@ except Exception as e:
     st.error(f"Chyba pri načítaní Excel súboru: {e}")
     st.stop()
 
-# Filtre v sidebare
+# --- FILTRE V SIDEBARE ---
 st.sidebar.subheader("🔍 Filtre")
+
+# 1. Výber lokality
+selected_lokalita = st.sidebar.selectbox(
+    "📍 Vyber lokalitu",
+    options=["Všetky lokality", "Poprad", "Bratislava"]
+)
+
+# 2. Výber mesiacov
 month_order = list(fve_df['Mesiac'].unique())
 selected_months = st.sidebar.multiselect(
-    "Vyber mesiace", 
+    "📅 Vyber mesiace", 
     options=month_order, 
     default=month_order
 )
 
-# Filtrovanie dát
+# --- APLIKÁCIA FILTROV ---
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy()
+
+if selected_lokalita != "Všetky lokality":
+    filtered_fve = filtered_fve[filtered_fve['Lokalita_raw'] == selected_lokalita]
+    filtered_elec = filtered_elec[filtered_elec['Lokalita'] == selected_lokalita]
 
 filtered_fve['Mesiac'] = pd.Categorical(filtered_fve['Mesiac'], categories=month_order, ordered=True)
 filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
 filtered_fve = filtered_fve.sort_values('Mesiac')
 filtered_elec = filtered_elec.sort_values('Mesiac')
 
-# Kľúčové ukazovatele za VŠETKY prevádzky
+# Kľúčové ukazovatele za vybraný filter
 total_elec_kwh = filtered_elec['Spotreba (kWh)'].sum()
 total_elec_eur = filtered_elec['Náklady (€)'].sum()
 avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
@@ -152,7 +169,7 @@ avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else
 total_fve_kwh = filtered_fve['Vyroba_kWh'].sum()
 total_fve_eur = filtered_fve['Uspora_EUR'].sum()
 
-st.subheader("📊 Kľúčové ukazovatele 2026 (Vybrané mesiace)")
+st.subheader(f"📊 Kľúčové ukazovatele 2026 ({selected_lokalita})")
 c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("🔌 Odber zo siete (Spolu)", f"{total_elec_kwh:,.0f} kWh")
@@ -172,7 +189,7 @@ tab1, tab2, tab3 = st.tabs([
 
 # ZÁLOŽKA 1: SPOTREBY A NÁKLADY
 with tab1:
-    st.subheader("Mesačný vývoj spotreby a nákladov podľa prevádzok")
+    st.subheader(f"Mesačný vývoj spotreby a nákladov ({selected_lokalita})")
     
     all_om = list(filtered_elec['Odberné miesto'].unique())
     selected_om = st.multiselect(
@@ -213,7 +230,7 @@ with tab1:
 
 # ZÁLOŽKA 2: FOTOVOLTIKA (SÚHRN + GRAFY POD SEBOU)
 with tab2:
-    st.subheader("☀️ Celkový sumár a porovnanie FVE: Poprad vs. Bratislava")
+    st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})")
     
     summary_fve = filtered_fve.groupby('Lokalita_raw').agg({
         'Vyroba_kWh': 'sum',
@@ -221,7 +238,6 @@ with tab2:
         'Podiel_Pokrytia_Pct': 'mean'
     }).reset_index()
 
-    # Doplnenie konkrétnych hodnôt priamo do názvov pre koláčové grafy (legenda)
     pie_labels_kwh = []
     pie_labels_eur = []
     for idx, row in summary_fve.iterrows():
@@ -276,7 +292,7 @@ with tab2:
     df_eur['Lokalita_FVE'] = lbl_eur
     df_pct['Lokalita_FVE'] = lbl_pct
 
-    # 1. GRAF: Mesačná výroba FVE (iba kWh)
+    # 1. GRAF: Mesačná výroba FVE
     fig_fve_kwh = px.bar(
         df_kwh, x='Mesiac', y='Vyroba_kWh', color='Lokalita_FVE', barmode='group',
         text='Vyroba_kWh',
@@ -290,7 +306,7 @@ with tab2:
 
     st.divider()
 
-    # 2. GRAF: Finančná úspora FVE (iba €)
+    # 2. GRAF: Finančná úspora FVE
     fig_fve_eur = px.bar(
         df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
         text='Uspora_EUR',
@@ -321,7 +337,7 @@ with tab2:
 
 # ZÁLOŽKA 3: JEDNOTKOVÁ CENA ZA 1 KWH
 with tab3:
-    st.subheader("Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh)")
+    st.subheader(f"Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh) – {selected_lokalita}")
     st.markdown("Tento prehľad zobrazuje, koľko nás stála 1 kWh elektriny v jednotlivých mesiacoch po prevádzkach.")
     
     if not filtered_elec.empty:
