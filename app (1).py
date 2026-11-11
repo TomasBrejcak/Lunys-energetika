@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ PARSER ZAMERANÝ NA KOMODITU, RK, MRK A JALOVINU ---
+# --- VYLEPSENÝ PARSER S FLEXIBILNÝM HĽADANÍMO ČÍSIEL ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -62,65 +62,54 @@ def parse_zse_pdf(pdf_path_or_file):
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
 
-    def safe_extract(patterns, default=0.0):
-        for pattern in patterns:
-            try:
-                m = re.search(pattern, text, re.IGNORECASE)
-                if m and m.group(1):
-                    val_str = m.group(1).strip().replace(" ", "").replace(",", ".")
+    def extract_val_near(keywords):
+        """Hľadá kľúčové slovo a zoberie najbližšie desatinné číslo v texte"""
+        for kw in keywords:
+            # Hľadá kľúčové slovo a za ním v rozmedzí do 50 znakov hľadá sumu typu XX,XX
+            pattern = re.escape(kw) + r'.*?(\d{1,3}(?:\s?\d{3})*,\d{2})'
+            m = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if m:
+                val_str = m.group(1).replace(" ", "").replace(",", ".")
+                try:
                     val = float(val_str)
                     if val > 0:
                         return val
-            except Exception:
-                continue
-        return default
+                except:
+                    continue
+        return 0.0
 
     # Spotreba v kWh
-    silova_kwh = safe_extract([
-        r'1T za elektrinu\s*([\d\s,]+)\s*kWh',
-        r'spotreba.*?([\d\s,]+)\s*kWh',
-        r'([\d\s,]+)\s*kWh\s*0,\d+'
-    ])
+    silova_kwh_match = re.search(r'1T za elektrinu\s*([\d\s,]+)\s*kWh', text, re.IGNORECASE)
+    if not silova_kwh_match:
+        silova_kwh_match = re.search(r'spotreba.*?([\d\s,]+)\s*kWh', text, re.IGNORECASE)
+    
+    silova_kwh = 0.0
+    if silova_kwh_match:
+        try:
+            silova_kwh = float(silova_kwh_match.group(1).replace(" ", "").replace(",", "."))
+        except:
+            pass
 
-    # Silová zložka (komodita)
-    silova_eur = safe_extract([
-        r'Dodávka elektriny\s*([\d\s,]+)\s*€',
-        r'Dodávka elektriny\s*\n\s*([\d\s,]+)\s*€',
-        r'Dodávka elektriny\s+([\d\s,]+)'
-    ])
-
-    # Rezervovaná kapacita (RK)
-    rk_poplatok = safe_extract([
-        r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€',
-        r'Rezervovaná kapacita.*?([\d\s,]+)\s*€',
-        r'Pevná zložka.*?([\d\s,]+)\s*€'
+    # Extrakcija cez flexibilné vyhľadávanie blízkych hodnôt
+    silova_eur = extract_val_near(['Dodávka elektriny'])
+    rk_poplatok = extract_val_near(['Pevná zložka tarify za distribúciu', 'Rezervovaná kapacita', 'Pevná zložka'])
+    
+    # Pokuty a špeciálne položky
+    mrk_prekrocenie = extract_val_near([
+        'Tarifa za prekročenie MRK', 
+        'Prekročenie rezervovanej kapacity', 
+        'Prekročenie maximálnej rezervovanej kapacity', 
+        'Prekročenie mesačnej rezervovanej kapacity'
     ])
     
-    # Prekročenie MRK (všetky varianty z faktúr)
-    mrk_prekrocenie = safe_extract([
-        r'Tarifa za prekročenie MRK.*?([\d\s,]+)\s*€',
-        r'Prekročenie rezervovanej kapacity.*?([\d\s,]+)\s*€',
-        r'Prekročenie maximálnej rezervovanej kapacity.*?([\d\s,]+)\s*€',
-        r'Prekročenie mesačnej rezervovanej kapacity.*?([\d\s,]+)\s*€'
-    ])
-    
-    # Jalovina a účinník (všetky varianty z faktúr)
-    jalovina = safe_extract([
-        r'Nevyžiad\.dod\.kapacitnej zložky jal\.en\..*?([\d\s,]+)\s*€',
-        r'Prirážka za nedodržanie účinníka.*?([\d\s,]+)\s*€',
-        r'Dodávka jalovej elektriny.*?([\d\s,]+)\s*€',
-        r'jal\.en\..*?([\d\s,]+)\s*€'
+    jalovina = extract_val_near([
+        'Nevyžiad.dod.kapacitnej zložky jal.en.', 
+        'Prirážka za nedodržanie účinníka', 
+        'Dodávka jalovej elektriny',
+        'jal.en.'
     ])
 
-    spolu_bez_dph = safe_extract([
-        r'Spolu za združ\.dod\.elektriny\s*([\d\s,]+)',
-        r'Suma spolu\s*([\d\s,]+)\s*€',
-        r'Spolu za miesto spotreby číslo:\s*\d+\s*([\d\s,]+)\s*€'
-    ])
-    
-    dph = safe_extract([r'DPH\s*([\d\s,]+)\s*€', r'19,00\s*([\d\s,]+)\s*([\d\s,]+)\s*€'])
-    spolu_s_dph = safe_extract([r'Suma na úhradu.*?([\d\s,]+)\s*€', r'Nedoplatok.*?([\d\s,]+)\s*€'])
-
+    spolu_bez_dph = extract_val_near(['Spolu za združ.dod.elektriny', 'Suma spolu'])
     if silova_eur == 0.0 and spolu_bez_dph > 0:
         silova_eur = spolu_bez_dph * 0.65
 
@@ -136,8 +125,7 @@ def parse_zse_pdf(pdf_path_or_file):
         "Prekročenie kapacity (MRK) (€)": mrk_prekrocenie,
         "Jalovina / Účinník (€)": jalovina,
         "Spolu bez DPH (€)": spolu_bez_dph,
-        "DPH (€)": dph,
-        "Spolu s DPH (€)": spolu_s_dph
+        "Raw_Text": text  # Uložíme si celý text pre kontrolu
     }
 
 @st.cache_data
@@ -305,7 +293,6 @@ with tab1:
 
 with tab2:
     st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})")
-    summary_fve = filtered_fve.groupby('Lokalita_raw').agg({'Vyroba_kWh': 'sum', 'Uspora_EUR': 'sum', 'Podiel_Pokrytia_Pct': 'mean'}).reset_index()
     st.dataframe(filtered_fve, use_container_width=True, hide_index=True)
 
 with tab3:
@@ -319,10 +306,10 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S FILTROM A SANKCIAMI
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S DIAGNOSTIKOU TEXTU
 with tab4:
-    st.subheader("📄 Analýza komodity a sankčných poplatkov (RK, MRK, Jalovina) zo ZSE faktúr")
-    st.markdown(f"Faktúry sú načítavané priamo z trvalého priečinka `/{INVOICE_DIR}`. Nové PDF môžeš pridať aj potiahnutím nižšie:")
+    st.subheader("📄 Analýza komodity a sankčných poplatkov zo ZSE faktúr")
+    st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}`.")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
     if uploaded_files:
@@ -360,8 +347,9 @@ with tab4:
 
             st.success(f"Zobrazených faktúr: {len(df_filtered_inv)}")
             
-            st.markdown("### 📊 Prehľad komodity a sankcií (RK, MRK, Jalovina)")
-            st.dataframe(df_filtered_inv, use_container_width=True, hide_index=True)
+            # Zobrazenie tabuľky bez stĺpca s dlhým surovým textom
+            display_cols = [c for c in df_filtered_inv.columns if c != "Raw_Text"]
+            st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
 
             st.divider()
             
@@ -371,34 +359,17 @@ with tab4:
                 c_f1, c_f2, c_f3, c_f4 = st.columns(4)
                 c_f1.metric("Spotreba elektriny", f"{row['Spotreba (kWh)']:,.0f} kWh")
                 c_f2.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
-                
-                rk_val = row['Rezervovaná kapacita (RK) (€)']
-                c_f3.metric("Rezervovaná kapacita (RK)", f"{rk_val:,.2f} €")
+                c_f3.metric("Rezervovaná kapacita (RK)", f"{row['Rezervovaná kapacita (RK) (€)']:,.2f} €")
                 
                 mrk_val = row['Prekročenie kapacity (MRK) (€)']
                 jal_val = row['Jalovina / Účinník (€)']
-                
                 total_sankcie = mrk_val + jal_val
                 c_f4.metric("Prekročenie MRK + Jalovina", f"{total_sankcie:,.2f} €", delta_color="inverse" if total_sankcie > 0 else "normal")
 
-                # Koláčový graf zameraný na komoditu a pokuty/kapacity
-                cost_breakdown = {
-                    "Silová zložka (Komodita)": row['Silová zložka (€)'],
-                    "Rezervovaná kapacita (RK)": row['Rezervovaná kapacita (RK) (€)'],
-                    "Prekročenie kapacity (MRK)": row['Prekročenie kapacity (MRK) (€)'],
-                    "Jalová elektrina / Účinník": row['Jalovina / Účinník (€)']
-                }
-                
-                df_break = pd.DataFrame([{"Položka": k, "Suma (€)": v} for k, v in cost_breakdown.items() if v > 0])
+                # DIAGNOSTICKÉ OKNO: Ak chceš vidieť presný text z PDF, rozklikni si to tu
+                with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
+                    st.text(row['Raw_Text'])
 
-                if not df_break.empty:
-                    fig_break = px.pie(
-                        df_break, names='Položka', values='Suma (€)',
-                        title=f"Podiel komodity a sankčných poplatkov ({row['Odberné miesto']})",
-                        hole=0.4, template="plotly_dark"
-                    )
-                    fig_break.update_traces(textinfo='percent+label', textfont=dict(size=14, color='white'))
-                    st.plotly_chart(fig_break, use_container_width=True)
                 st.divider()
     else:
-        st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry. Pretiahni ich vyššie alebo ulož do daného priečinka.")
+        st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry.")
