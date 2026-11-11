@@ -112,6 +112,20 @@ def parse_zse_pdf(pdf_path):
                                 return val
                         except:
                             pass
+            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
+            for pos in matches:
+                window = text[pos:pos+150]
+                if any(x in window.lower() for x in ['technické údaje', 'stav']):
+                    continue
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
+                if amounts:
+                    val_str = amounts[-1].replace(" ", "").replace(",", ".")
+                    try:
+                        val = float(val_str)
+                        if 0 <= val < 1000000:
+                            return val
+                    except:
+                        pass
         return 0.0
 
     def get_line_kwh(keyword):
@@ -157,10 +171,33 @@ def parse_zse_pdf(pdf_path):
                 except:
                     pass
 
-    rk_prekrocenie = get_penalty_cost(['Prekročenie rezervovanej kapacity', 'Prekročenie RK'])
-    mrk_prekrocenie = get_penalty_cost(['Prekročenie maximálnej rezervovanej kapacity', 'Prekročenie MRK'])
-    jalovina = get_penalty_cost(['Dodávka jalovej elektriny', 'Jalová elektrina'])
-    ucinnik = get_penalty_cost(['Prirážka za nedodržanie účinníka', 'Účinník'])
+    rk_prekrocenie = get_penalty_cost([
+        'Prekročenie rezervovanej kapacity', 
+        'Prekročenie RK',
+        'Tarifa za prekročenie rezervovanej kapacity'
+    ])
+    
+    mrk_prekrocenie = get_penalty_cost([
+        'Prekročenie maximálnej rezervovanej kapacity', 
+        'Tarifa za prekročenie MRK',
+        'Prekročenie MRK'
+    ])
+    
+    jalovina = get_penalty_cost([
+        'Dodávka jalovej elektriny', 
+        'Nevyžiad.dod.kapacitnej zložky jal.en.', 
+        'Jalová elektrina',
+        'Dodávka jalovej induktívnej',
+        'Dodávka jalovej kapacitnej'
+    ])
+    
+    ucinnik = get_penalty_cost([
+        'Prirážka za nedodržanie účinníka', 
+        'Nedodržanie účinníka',
+        'Prirážka za účinník',
+        'Účinník'
+    ])
+    
     celkove_pokuty = rk_prekrocenie + mrk_prekrocenie + jalovina + ucinnik
 
     spolu_bez_dph = 0.0
@@ -361,7 +398,6 @@ if all_possible_oms:
     
     st.sidebar.markdown("**📍 Poprad**")
     
-    # Skupina PEBEK (vrátane Skladovej haly I. a Správy 99)
     pebek_group = ["Trafostanica PEBEK", "Skladová hala I.", "Správa 99"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica PEBEK (Vstup)**")
     for om in pebek_group:
@@ -370,7 +406,6 @@ if all_possible_oms:
             if is_checked:
                 updated_oms.append(om)
 
-    # Skupina HARAMIA (vrátane Bananárne a Zemiakárne)
     haramia_group = ["Trafostanica HARAMIA", "Bananáreň", "Zemiakareň"]
     st.sidebar.markdown("&nbsp;&nbsp;&nbsp;&nbsp;⚡ **Trafostanica HARAMIA (Vstup)**")
     for om in haramia_group:
@@ -530,12 +565,87 @@ elif selected_tab == TAB_NAMES[2]:
         st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
 
 elif selected_tab == TAB_NAMES[3]:
-    st.subheader("📄 Analýza PDF faktúr zo ZSE & Správa")
+    st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
     
     pdf_only_df = filtered_elec[filtered_elec['Zdroj'].str.contains("PDF", na=False)]
     if not pdf_only_df.empty:
-        st.success(f"Zobrazených záznamov z PDF faktúr: {len(pdf_only_df)}")
-        st.dataframe(pdf_only_df[['Mesiac', 'Odberné miesto', 'Číslo faktúry (VS)', 'Fakturačné obdobie', 'Spotreba (kWh)', 'Spolu bez DPH (€)', 'SPOLU POKUTY (€)']], use_container_width=True, hide_index=True)
+        df_filtered_inv = pdf_only_df.copy()
+        df_filtered_inv = df_filtered_inv.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
+        df_filtered_inv = df_filtered_inv.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
+        
+        st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
+        st.divider()
+
+        st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií z faktúr")
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            tot_silova = df_filtered_inv['Silová zložka (€)'].sum()
+            tot_distrib = df_filtered_inv['Distribúcia celkom (€)'].sum()
+            sum_cost_total = tot_silova + tot_distrib
+            
+            df_pie_cost = pd.DataFrame({
+                'Zložka': [f"Silová zložka ({tot_silova:,.2f} €)", f"Distribúcia celkom ({tot_distrib:,.2f} €)"],
+                'Suma': [tot_silova, tot_distrib]
+            })
+            
+            fig_pie1 = px.pie(
+                df_pie_cost, names='Zložka', values='Suma', hole=0.4,
+                title="Podiel nákladov: Silová zložka vs. Distribúcia",
+                template="plotly_dark"
+            )
+            fig_pie1.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie1, use_container_width=True)
+            st.markdown(f"**Spolu náklady: {sum_cost_total:,.2f} €**")
+
+        with col_g2:
+            tot_rk = df_filtered_inv['Prekročenie RK (€)'].sum()
+            tot_mrk = df_filtered_inv['Prekročenie MRK (€)'].sum()
+            tot_jalova = df_filtered_inv['Jalová elektrina (€)'].sum()
+            tot_ucinnik = df_filtered_inv['Prirážka za účinník (€)'].sum()
+            sum_penalties_total = tot_rk + tot_mrk + tot_jalova + tot_ucinnik
+            
+            df_pie_penalties = pd.DataFrame({
+                'Typ sankcie': [
+                    f"Prekročenie RK ({tot_rk:,.2f} €)",
+                    f"Prekročenie MRK ({tot_mrk:,.2f} €)", 
+                    f"Jalová elektrina ({tot_jalova:,.2f} €)", 
+                    f"Prirážka za účinník ({tot_ucinnik:,.2f} €)"
+                ],
+                'Suma': [tot_rk, tot_mrk, tot_jalova, tot_ucinnik]
+            })
+            
+            fig_pie2 = px.pie(
+                df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
+                title="Súhrn pokút a sankcií",
+                template="plotly_dark"
+            )
+            fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie2, use_container_width=True)
+            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
+
+        st.divider()
+
+        st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
+        display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac", "Raw_Data"]]
+        st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.markdown("### 🔎 Detail faktúr podľa mesiacov")
+        for idx, row in df_filtered_inv.iterrows():
+            st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
+            
+            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+            c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
+            c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
+            c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
+            c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
+
+            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
+                st.text(row['Raw_Text'])
+
+            st.divider()
     else:
         st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania sa načítavajú z Excelu).")
 
