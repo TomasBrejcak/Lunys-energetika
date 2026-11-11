@@ -458,7 +458,7 @@ if st.sidebar.button("💶 Spotová cena kWh", use_container_width=True, on_clic
 if st.sidebar.button("📄 Analýza PDF Faktúr", use_container_width=True, on_click=set_tab, args=(TAB_NAMES[3],)):
     pass
 
-# Filtrovanie dát
+# Filtrovanie dát pre grafy a tabuľky
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy() if not fve_df.empty else pd.DataFrame()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy() if not elec_df.empty else pd.DataFrame()
 
@@ -473,8 +473,18 @@ if not filtered_elec.empty:
     filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
     filtered_elec = filtered_elec.sort_values('Mesiac')
 
-total_elec_kwh = filtered_elec['Spotreba (kWh)'].sum() if not filtered_elec.empty else 0.0
-total_elec_eur = filtered_elec['Náklady (€)'].sum() if not filtered_elec.empty else 0.0
+# --- BEZPEČNÝ VÝPOČET KPI SÚHRNOV (ZABRÁNENIE DUPLICITNÉMU SČÍTANIU TRAFA A PODRUŽNÝCH MERANÍ) ---
+kpi_df = filtered_elec.copy()
+if not kpi_df.empty:
+    # Ak je označená Trafostanica PEBEK, vynecháme jej podružné merania z hlavného KPI súhrnu, aby sa nezrátavali dvakrát
+    if "Trafostanica PEBEK" in kpi_df['Odberné miesto'].values:
+        kpi_df = kpi_df[~kpi_df['Odberné miesto'].isin(["Skladová hala I.", "Správa 99"])]
+    # Ak je označená Trafostanica HARAMIA, vynecháme jej podružné merania z hlavného KPI súhrnu
+    if "Trafostanica HARAMIA" in kpi_df['Odberné miesto'].values:
+        kpi_df = kpi_df[~kpi_df['Odberné miesto'].isin(["Bananáreň", "Zemiakareň"])]
+
+total_elec_kwh = kpi_df['Spotreba (kWh)'].sum() if not kpi_df.empty else 0.0
+total_elec_eur = kpi_df['Náklady (€)'].sum() if not kpi_df.empty else 0.0
 avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
 
 total_fve_kwh = filtered_fve['Vyroba_kWh'].sum() if not filtered_fve.empty else 0.0
@@ -505,11 +515,10 @@ if selected_tab == TAB_NAMES[0]:
             fig_elec_eur = px.bar(filtered_elec, x='Mesiac', y='Náklady (€)', color='Odberné miesto', barmode='group', title="Mesačné náklady bez DPH (€)", template="plotly_dark")
             st.plotly_chart(fig_elec_eur, use_container_width=True)
             
-        # Doplnený súhrnný prehľad pod grafmi
         st.divider()
         col_sub1, col_sub2 = st.columns(2)
-        col_sub1.metric("Celková spotreba (vybrané miesta)", f"{filtered_elec['Spotreba (kWh)'].sum():,.0f} kWh")
-        col_sub2.metric("Celkové náklady (vybrané miesta)", f"{filtered_elec['Náklady (€)'].sum():,.2f} €")
+        col_sub1.metric("Celková spotreba (čistý súhrn bez duplicity traf)", f"{kpi_df['Spotreba (kWh)'].sum():,.0f} kWh")
+        col_sub2.metric("Celkové náklady (čistý súhrn bez duplicity traf)", f"{kpi_df['Náklady (€)'].sum():,.2f} €")
         st.divider()
 
         st.dataframe(filtered_elec[['Mesiac', 'Odberné miesto', 'Lokalita', 'Spotreba (kWh)', 'Náklady (€)', 'Cena (€/kWh)', 'Zdroj']], use_container_width=True, hide_index=True)
@@ -655,14 +664,4 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
     else:
-        st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania sa načítavajú z Excelu).")
-
-    st.divider()
-    st.markdown("### 📤 Nahranie ďalších PDF faktúr")
-    uploaded_files = st.file_uploader("Pridaj ďalšie PDF faktúry:", type=["pdf"], accept_multiple_files=True, key="uploader_bottom")
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            file_path = os.path.join(INVOICE_DIR, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-        st.success(f"Úspešne uložených {len(uploaded_files)} súborov do `{INVOICE_DIR}`. Obnov stránku.")
+        st.info("Pre vybrané od
