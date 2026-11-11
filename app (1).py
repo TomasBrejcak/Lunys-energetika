@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ PARSER ZAMERANÝ NA KOMODITU A POKUTY (MRK, JALOVINA, ÚČINNÍK) ---
+# --- PRESNÝ PARSER ZSE FAKTÚR ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -63,7 +63,6 @@ def parse_zse_pdf(pdf_path_or_file):
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
 
     def extract_line_amount(item_name):
-        """Nájde presnú sumu (€) pre konkrétny riadok položky na faktúre"""
         pattern = re.escape(item_name) + r'.*?([\d\s]+,\d{2})\s*(?:€)?\s*$'
         m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if m:
@@ -97,6 +96,21 @@ def parse_zse_pdf(pdf_path_or_file):
 
     silova_eur = extract_line_amount('1T za elektrinu')
 
+    # Celková suma bez DPH
+    spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
+    spolu_bez_dph = 0.0
+    if spolu_match:
+        try:
+            spolu_bez_dph = float(spolu_match.group(1).replace(" ", "").replace(",", "."))
+        except:
+            pass
+
+    if silova_eur == 0.0 and spolu_bez_dph > 0:
+        silova_eur = spolu_bez_dph * 0.65
+
+    # Distribúcia celkom (všetko okrem silovej zložky ak nie je špecifikované inak, prípadne rozdiferencované)
+    distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
+
     # --- POKUTY A SANKČNÉ POLOŽKY ---
     mrk_prekrocenie = extract_line_amount('Tarifa za prekročenie MRK')
     if mrk_prekrocenie == 0.0:
@@ -109,19 +123,7 @@ def parse_zse_pdf(pdf_path_or_file):
         jalovina = extract_line_amount('Nevyžiad.dod.kapacitnej zložky jal.en.')
     
     ucinnik = extract_line_amount('Prirážka za nedodržanie účinníka')
-    
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
-
-    spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
-    spolu_bez_dph = 0.0
-    if spolu_match:
-        try:
-            spolu_bez_dph = float(spolu_match.group(1).replace(" ", "").replace(",", "."))
-        except:
-            pass
-
-    if silova_eur == 0.0 and spolu_bez_dph > 0:
-        silova_eur = spolu_bez_dph * 0.65
 
     return {
         "EIC": eic_code,
@@ -131,6 +133,7 @@ def parse_zse_pdf(pdf_path_or_file):
         "Fakturačné obdobie": obdobie,
         "Spotreba (kWh)": silova_kwh,
         "Silová zložka (€)": silova_eur,
+        "Distribúcia celkom (€)": distribucia_eur,
         "Prekročenie MRK (€)": mrk_prekrocenie,
         "Jalová elektrina (€)": jalovina,
         "Prirážka za účinník (€)": ucinnik,
@@ -341,7 +344,7 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S FILTROM A SANKCIAMI
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S GRAFOVÝM SÚMAROM A SANKCIAMI
 with tab4:
     st.subheader("📄 Analýza komodity a sankčných poplatkov (MRK, Jalovina, Účinník) zo ZSE faktúr")
     st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}`.")
@@ -381,6 +384,43 @@ with tab4:
                 df_filtered_inv = df_invoices
 
             st.success(f"Zobrazených faktúr: {len(df_filtered_inv)}")
+
+            # ==========================================
+            # SÚHRNNÉ GRAFY NA ZAČIATKU ZÁLOŽKY
+            # ==========================================
+            st.markdown("### 📈 Súhrnný prehľad načítaných faktúr")
+            
+            col_g1, col_g2 = st.columns(2)
+            
+            with col_g1:
+                # 1. Graf: Silová zložka vs Distribúcia
+                df_melt_cost = df_filtered_inv.melt(
+                    id_vars=['Odberné miesto', 'Fakturačné obdobie'],
+                    value_vars=['Silová zložka (€)', 'Distribúcia celkom (€)'],
+                    var_name='Zložka', value_name='Suma (€)'
+                )
+                fig_g1 = px.bar(
+                    df_melt_cost, x='Fakturačné obdobie', y='Suma (€)', color='Zložka', barmode='group',
+                    title="Porovnané náklady: Silová zložka vs. Distribúcia",
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_g1, use_container_width=True)
+
+            with col_g2:
+                # 2. Graf: Pokuty a sankcie (MRK, Jalovina, Účinník)
+                df_melt_penalties = df_filtered_inv.melt(
+                    id_vars=['Odberné miesto', 'Fakturačné obdobie'],
+                    value_vars=['Prekročenie MRK (€)', 'Jalová elektrina (€)', 'Prirážka za účinník (€)'],
+                    var_name='Typ sankcie', value_name='Suma (€)'
+                )
+                fig_g2 = px.bar(
+                    df_melt_penalties, x='Fakturačné obdobie', y='Suma (€)', color='Typ sankcie', barmode='group',
+                    title="Súhrn pokúf a sankcií (MRK, Jalovina, Účinník)",
+                    template="plotly_dark"
+                )
+                st.plotly_chart(fig_g2, use_container_width=True)
+
+            st.divider()
             
             display_cols = [c for c in df_filtered_inv.columns if c != "Raw_Text"]
             st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
