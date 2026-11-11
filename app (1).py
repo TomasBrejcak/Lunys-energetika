@@ -121,13 +121,13 @@ def parse_zse_pdf(pdf_path_or_file):
             except:
                 pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY ---
+    # --- POKUTY A SANKČNÉ POLOŽKY (sú už v distribúcii) ---
     mrk_prekrocenie = get_line_cost(['Tarifa za prekročenie MRK', 'Prekročenie rezervovanej kapacity', 'Prekročenie maximálnej rezervovanej kapacity'])
     jalovina = get_line_cost(['Dodávka jalovej elektriny', 'Nevyžiad.dod.kapacitnej zložky jal.en.'])
     ucinnik = get_line_cost('Prirážka za nedodržanie účinníka')
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
-    # Hľadanie reálnej celkovej sumy bez DPH zo sumy spolu za celú faktúru
+    # Reálna celková suma bez DPH zo sumy spolu za celú faktúru (žiadne umelé pripočítavanie)
     spolu_bez_dph = 0.0
     spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
     if spolu_match:
@@ -138,10 +138,9 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
-    # Ak suma spolu nesedí alebo sa nenašla, spočítame ju ako reálny súčet zložiek
-    calculated_total = silova_eur + distribucia_eur + celkove_pokuty
-    if spolu_bez_dph == 0.0 or abs(spolu_bez_dph - calculated_total) > 50.0:
-        spolu_bez_dph = calculated_total
+    # Fallback pre celkovú sumu, ak by sa nenašla
+    if spolu_bez_dph == 0.0:
+        spolu_bez_dph = silova_eur + distribucia_eur
 
     return {
         "EIC": eic_code,
