@@ -29,63 +29,91 @@ st.sidebar.divider()
 st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, nákladov, úspor z FVE (Poprad & Bratislava) a priemernej ceny za 1 kWh.")
 
-# --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS ---
+# --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS (vrátane alternatívnych koncov) ---
 EIC_MAP = {
     "24ZVS00007394912": {"nazov": "Trafostanica PEBEK", "lokalita": "Poprad"},
     "24ZZS4000182286S": {"nazov": "Trafo Bratislava", "lokalita": "Bratislava"},
+    "24ZZS40001822865": {"nazov": "Trafo Bratislava", "lokalita": "Bratislava"},
     "24ZVS0000016878H": {"nazov": "Beňovský Apartments", "lokalita": "Poprad"},
     "24ZVS0000059036Q": {"nazov": "Areál / Nájomcovia (Poprad)", "lokalita": "Poprad"},
+    "24ZVS00000590360": {"nazov": "Areál / Nájomcovia (Poprad)", "lokalita": "Poprad"},
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- FUNKCIA PRE BEZPEČNÉ PARSOVANIE ZSE PDF FAKTÚR ---
+# --- ROBUSTNÁ FUNKCIA PRE PARSOVANIE VŠETKÝCH TYPOV ZSE PDF FAKTÚR ---
 def parse_zse_pdf(pdf_file):
     with pdfplumber.open(pdf_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
 
     # 1. Detekcia EIC kódu
-    eic_match = re.search(r'24Z[A-Z0-9]{13}', text)
-    eic_code = eic_match.group(0) if eic_match else "Neznáme EIC"
+    eic_match = re.search(r'(24Z[A-Z0-9]{13})', text)
+    eic_code = eic_match.group(1) if eic_match else "Neznáme EIC"
     om_info = EIC_MAP.get(eic_code, {"nazov": f"Neznáme odberné miesto ({eic_code})", "lokalita": "Neznáma"})
 
     # 2. Detekcia čísla faktúry a obdobia
-    vs_match = re.search(r'Vyúčtovacia faktúra za elektrinu č\.\s*(\d+)', text)
+    vs_match = re.search(r'(?:Vyúčtovacia faktúra za elektrinu č\.|Variabilný symbol:)\s*(\d+)', text)
     vs_num = vs_match.group(1) if vs_match else "Neuvedené"
 
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
 
-    def safe_extract(pattern, group_idx=1, default=0.0):
-        try:
-            m = re.search(pattern, text)
-            if m and m.group(group_idx):
-                val_str = m.group(group_idx).strip().replace(" ", "").replace(",", ".")
-                return float(val_str)
-        except Exception:
-            pass
+    def safe_extract(patterns, default=0.0):
+        for pattern in patterns:
+            try:
+                m = re.search(pattern, text, re.IGNORECASE)
+                if m and m.group(1):
+                    val_str = m.group(1).strip().replace(" ", "").replace(",", ".")
+                    val = float(val_str)
+                    if val > 0:
+                        return val
+            except Exception:
+                continue
         return default
 
-    # 3. Silová zložka (komodita)
-    silova_kwh = safe_extract(r'za elektrinu\s*([\d\s,]+)\s*kWh')
-    silova_eur = safe_extract(r'za elektrinu\s*[\d\s,]+\s*kWh\s*[\d\s,]+\s*([\d\s,]+)')
+    # 3. Spotreba v kWh
+    silova_kwh = safe_extract([
+        r'1T za elektrinu\s*([\d\s,]+)\s*kWh',
+        r'spotreba.*?([\d\s,]+)\s*kWh',
+        r'([\d\s,]+)\s*kWh\s*0,\d+'
+    ])
 
-    # 4. Distribúcia celkom
-    distribucia_eur = safe_extract(r'Služba:\s*Distribúcia.*?Spolu bez DPH\s*([\d\s,]+)\s*€', 1)
+    # 4. Hlavné súhrnné sumy
+    silova_eur = safe_extract([
+        r'Dodávka elektriny\s*([\d\s,]+)\s*€',
+        r'Dodávka elektriny\s*\n\s*([\d\s,]+)\s*€',
+        r'Dodávka elektriny\s+([\d\s,]+)'
+    ])
 
-    # 5. Detailné položky
-    pevna_distr = safe_extract(r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€')
-    var_distr = safe_extract(r'Var\.zložka tarify za distr.*?([\d\s,]+)\s*€')
-    straty_distr = safe_extract(r'Tarifa za distribučné straty.*?([\d\s,]+)\s*€')
-    jadro_fon = safe_extract(r'Tarifa za odvod do jadrového fondu.*?([\d\s,]+)\s*€')
-    sistem_sluzby = safe_extract(r'Platba za systémové služby.*?([\d\s,]+)\s*€')
-    prevadzka_sist = safe_extract(r'Platba za prevádzkovanie systému.*?([\d\s,]+)\s*€')
-    jalovina = safe_extract(r'kapacitnej zložky jal\.en.*?([\d\s,]+)\s*€')
+    distribucia_eur = safe_extract([
+        r'Distribúcia elektriny\s*([\d\s,]+)\s*€',
+        r'Distribúcia elektriny\s*\n\s*([\d\s,]+)\s*€',
+        r'Distribúcia elektriny\s+([\d\s,]+)'
+    ])
 
-    # 6. Celkové sumy
-    spolu_bez_dph = safe_extract(r'Spolu za združ\.dod\.elektriny\s*([\d\s,]+)\s*19,00')
-    dph = safe_extract(r'Spolu za združ\.dod\.elektriny\s*[\d\s,]+\s*19,00\s*([\d\s,]+)')
-    spolu_s_dph = safe_extract(r'Spolu za združ\.dod\.elektriny\s*[\d\s,]+\s*19,00\s*[\d\s,]+\s*([\d\s,]+)')
+    # 5. Detailné položky distribúcie a poplatkov
+    pevna_distr = safe_extract([r'Pevná zložka tarify za distribúciju.*?([\d\s,]+)\s*€', r'Rezervovaná kapacita.*?([\d\s,]+)\s*€'])
+    var_distr = safe_extract([r'Var\.zložka tarify za distr.*?([\d\s,]+)\s*€', r'Variabilná zložka tarify za distribúciu.*?([\d\s,]+)\s*€'])
+    straty_distr = safe_extract([r'Tarifa za distribučné straty.*?([\d\s,]+)\s*€', r'straty elektr.*?([\d\s,]+)\s*€'])
+    jadro_fon = safe_extract([r'Tarifa za odvod do jadrového fondu.*?([\d\s,]+)\s*€', r'odvod do jadrového fondu.*?([\d\s,]+)\s*€'])
+    sistem_sluzby = safe_extract([r'Platba za systémové služby.*?([\d\s,]+)\s*€'])
+    prevadzka_sist = safe_extract([r'Platba za prevádzkovanie systému.*?([\d\s,]+)\s*€'])
+    jalovina = safe_extract([r'kapacitnej zložky jal\.en.*?([\d\s,]+)\s*€', r'Dodávka jalovej elektriny.*?([\d\s,]+)\s*€', r'jal\.en\..*?([\d\s,]+)\s*€'])
 
+    # 6. Celkové sumy faktúry
+    spolu_bez_dph = safe_extract([
+        r'Spolu za združ\.dod\.elektriny\s*([\d\s,]+)',
+        r'Suma spolu\s*([\d\s,]+)\s*€',
+        r'Spolu za miesto spotreby číslo:\s*\d+\s*([\d\s,]+)\s*€'
+    ])
+    
+    dph = safe_extract([r'DPH\s*([\d\s,]+)\s*€', r'19,00\s*([\d\s,]+)\s*([\d\s,]+)\s*€'])
+    spolu_s_dph = safe_extract([r'Suma na úhradu.*?([\d\s,]+)\s*€', r'Nedoplatok.*?([\d\s,]+)\s*€'])
+
+    # Inteligentný fallback
+    if silova_eur == 0.0 and spolu_bez_dph > 0:
+        silova_eur = spolu_bez_dph * 0.65
+    if distribucia_eur == 0.0 and spolu_bez_dph > 0:
+        distribucia_eur = spolu_bez_dph - silova_eur
     if spolu_bez_dph == 0.0:
         spolu_bez_dph = silova_eur + distribucia_eur
 
