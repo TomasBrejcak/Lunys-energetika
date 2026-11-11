@@ -385,4 +385,143 @@ with tab2:
     st.divider()
 
     fig_fve_eur = px.bar(
-        df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE
+        df_eur, x='Mesiac', y='Uspora_EUR', color='Lokalita_FVE', barmode='group',
+        text='Uspora_EUR',
+        title="Finančná úspora FVE v €", labels={'Uspora_EUR': 'Úspora (€)', 'Mesiac': 'Mesiac'},
+        template="plotly_dark", height=500
+    )
+    fig_fve_eur.update_traces(texttemplate='%{text:,.0f} €', textposition='outside', textfont=dict(size=20, color='white', family="Arial Black"))
+    fig_fve_eur.update_xaxes(categoryorder='array', categoryarray=month_order)
+    fig_fve_eur.update_layout(font=dict(size=14), margin=dict(t=100, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    st.plotly_chart(fig_fve_eur, use_container_width=True)
+
+    st.divider()
+
+    fig_pct = px.bar(
+        df_pct, x='Mesiac', y='Podiel_Pokrytia_Pct', color='Lokalita_FVE', barmode='group',
+        text='Podiel_Pokrytia_Pct',
+        title="Pokrytie spotreby objektu z FVE (%)", labels={'Podiel_Pokrytia_Pct': 'Pokrytie (%)', 'Mesiac': 'Mesiac'},
+        template="plotly_dark", height=500
+    )
+    fig_pct.update_traces(texttemplate='%{text:.1f} %', textposition='outside', textfont=dict(size=20, color='white', family="Arial Black"))
+    fig_pct.update_xaxes(categoryorder='array', categoryarray=month_order)
+    fig_pct.update_layout(font=dict(size=14), margin=dict(t=100, b=20, l=20, r=20), bargap=0.15, bargroupgap=0.05)
+    st.plotly_chart(fig_pct, use_container_width=True)
+
+    st.markdown("#### Detailné dáta FVE 2026")
+    st.dataframe(filtered_fve, use_container_width=True, hide_index=True)
+
+# ZÁLOŽKA 3: JEDNOTKOVÁ CENA ZA 1 KWH
+with tab3:
+    st.subheader(f"Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh) – {selected_lokalita}")
+    
+    if not filtered_elec.empty:
+        fig_price_trend = px.line(
+            filtered_elec, 
+            x='Mesiac', 
+            y='Cena (€/kWh)', 
+            color='Odberné miesto', 
+            markers=True,
+            title="Vývoj ceny 1 kWh podľa odberných miest (€/kWh)",
+            labels={'Cena (€/kWh)': 'Cena (€/kWh)', 'Mesiac': 'Mesiac'},
+            template="plotly_dark"
+        )
+        fig_price_trend.update_xaxes(categoryorder='array', categoryarray=month_order)
+        fig_price_trend.update_yaxes(tickformat=".4f")
+        fig_price_trend.update_layout(font=dict(size=14))
+        st.plotly_chart(fig_price_trend, use_container_width=True)
+
+    st.markdown("### Priemerná cena 1 kWh za vybrané obdobie")
+    
+    records_price = []
+    for om in filtered_elec['Odberné miesto'].unique():
+        sub = filtered_elec[filtered_elec['Odberné miesto'] == om]
+        tot_kwh = sub['Spotreba (kWh)'].sum()
+        tot_eur = sub['Náklady (€)'].sum()
+        avg_p = (tot_eur / tot_kwh) if tot_kwh > 0 else 0.0
+        records_price.append({
+            'Odberné miesto': om,
+            'Celková spotreba (kWh)': tot_kwh,
+            'Celkové náklady (€)': tot_eur,
+            'Priemerná cena (€/kWh)': avg_p
+        })
+    df_price_table = pd.DataFrame(records_price)
+    
+    if not df_price_table.empty:
+        st.dataframe(
+            df_price_table.style.format({
+                'Celková spotreba (kWh)': '{:,.0f}',
+                'Celkové náklady (€)': '{:,.2f} €',
+                'Priemerná cena (€/kWh)': '{:.4f} €'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+# ZÁLOŽKA 4: AUTOMATICKÉ PARSOVANIE PDF FAKTÚR
+with tab4:
+    st.subheader("📄 Automatická analýza a parsovanie ZSE faktúr z PDF")
+    st.markdown("Nahrajte jednu alebo viaceré vyúčtovacie PDF faktúry od ZSE. Systém automaticky zistí EIC kód, priradí odberné miesto a rozbije sumu na silovú zložku, distribúciu a poplatky.")
+
+    uploaded_files = st.file_uploader(
+        "Sem pretiahnite PDF faktúry (zse_faktura.pdf):", 
+        type=["pdf"], 
+        accept_multiple_files=True
+    )
+
+    if uploaded_files:
+        parsed_results = []
+        for pdf_file in uploaded_files:
+            try:
+                data = parse_zse_pdf(pdf_file)
+                parsed_results.append(data)
+            except Exception as e:
+                st.error(f"Chyba pri spracovaní súboru {pdf_file.name}: {e}")
+
+        if parsed_results:
+            df_invoices = pd.DataFrame(parsed_results)
+            st.success(f"Úspešne spracovaných faktúr: {len(df_invoices)}")
+            
+            st.markdown("### 📊 Extrahované údaje z faktúr")
+            st.dataframe(df_invoices, use_container_width=True, hide_index=True)
+
+            st.divider()
+            
+            st.markdown("### 🔍 Štruktúra nákladov faktúry (Silová zložka vs. Distribúcia a poplatky)")
+            
+            for idx, row in df_invoices.iterrows():
+                st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
+                
+                c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+                c_f1.metric("Spotreba elektriny", f"{row['Spotreba (kWh)']:,.0f} kWh")
+                c_f2.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
+                c_f3.metric("Distribúcia & Poplatky", f"{row['Distribúcia celkom (€)']:,.2f} €")
+                
+                jal_val = row['Jalová elektrina (€)']
+                c_f4.metric("Jalová elektrina / Pokuty", f"{jal_val:,.2f} €", delta_color="inverse" if jal_val > 0 else "normal")
+
+                cost_breakdown = {
+                    "Silová zložka": row['Silová zložka (€)'],
+                    "Pevná zložka (ističe/kapacita)": row['Pevná zložka (ističe) (€)'],
+                    "Variabilná distribúcia": row['Variabilná distribúcia (€)'],
+                    "Distribučné straty": row['Distribučné straty (€)'],
+                    "Jadrový fond": row['Jadrový fond (€)'],
+                    "Systémové služby": row['Systémové služby (€)'],
+                    "Prevádzkovanie systému": row['Prevádzkovanie systému (€)'],
+                    "Jalová elektrina": row['Jalová elektrina (€)']
+                }
+                
+                df_break = pd.DataFrame([
+                    {"Položka": k, "Suma (€)": v} for k, v in cost_breakdown.items() if v > 0
+                ])
+
+                if not df_break.empty:
+                    fig_break = px.pie(
+                        df_break, names='Položka', values='Suma (€)',
+                        title=f"Podiel jednotlivých zložiek na cene bez DPH ({row['Odberné miesto']})",
+                        hole=0.4, template="plotly_dark"
+                    )
+                    fig_break.update_traces(textinfo='percent+label', textfont=dict(size=14, color='white'))
+                    fig_break.update_layout(font=dict(size=14))
+                    st.plotly_chart(fig_break, use_container_width=True)
+                st.divider()
