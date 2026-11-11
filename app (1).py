@@ -56,8 +56,13 @@ def parse_zse_pdf(pdf_path):
 
     # 1. Detekcia EIC kódu
     eic_match = re.search(r'(24Z[A-Z0-9]{13})', text)
-    eic_code = eic_match.group(1) if eic_match else "Neznáme EIC"
-    om_info = EIC_MAP.get(eic_code, {"nazov": f"Neznáme odberné miesto ({eic_code})", "lokalita": "Neznáma"})
+    eic_code = eic_match.group(1) if eic_match else None
+    
+    # Ak EIC kód neexistuje alebo nie je v mape, ignorujeme ho (žiadne "Neznáme odberné miesto")
+    if not eic_code or eic_code not in EIC_MAP:
+        return None
+
+    om_info = EIC_MAP[eic_code]
 
     # 2. Detekcia čísla faktúry a obdobia
     vs_match = re.search(r'(?:Vyúčtovacia faktúra za elektrinu č\.|Variabilný symbol:)\s*(\d+)', text)
@@ -259,13 +264,13 @@ def load_fve_data():
 
 fve_df = load_fve_data()
 
-# Načítanie reálnych dát z nahratých PDF faktúr pre elektrinu
+# Načítanie reálnych dát z nahratých PDF faktúr pre elektrinu (bez "Neznáme odberné miesto")
 all_pdf_files = [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
 parsed_invoice_records = []
 for f in all_pdf_files:
     f_path = os.path.join(INVOICE_DIR, f)
     res = parse_zse_pdf(f_path)
-    if res:
+    if res and res["Odberné miesto"] and "neznáme" not in res["Odberné miesto"].lower():
         parsed_invoice_records.append({
             'Mesiac': res['Mesiac'],
             'Lokalita': res['Lokalita'],
@@ -296,20 +301,34 @@ if 'active_tab' not in st.session_state:
 def set_tab(tab_name):
     st.session_state.active_tab = tab_name
 
-# Zoznam všetkých dostupných odberných miest pre Excel-like výber
+# Zoznam všetkých dostupných odberných miest (bez neznámych)
 all_possible_oms = sorted(elec_df['Odberné miesto'].unique()) if not elec_df.empty else []
 
-# Inicializácia session_state pre výber odberných miest, aby si pamätal stav
 if 'selected_oms' not in st.session_state:
     st.session_state.selected_oms = all_possible_oms
 
-# --- FILTRE & OVLÁDANIE V SIDEBARE ---
-st.sidebar.subheader("🔍 Globálne filtre")
+# --- SIDEBAR: VÝBER ODBERNÝCH MIEST ---
+st.sidebar.subheader("🏢 Odberné miesta (Excel Filter)")
 
-selected_lokalita = st.sidebar.selectbox(
-    "📍 Vyber lokalitu",
-    options=["Všetky lokality", "Poprad", "Bratislava"]
-)
+if all_possible_oms:
+    col_s1, col_s2 = st.sidebar.columns(2)
+    if col_s1.button("Vybrať všetko"):
+        st.session_state.selected_oms = all_possible_oms
+    if col_s2.button("Zrušiť všetko"):
+        st.session_state.selected_oms = []
+
+    updated_oms = []
+    for om in all_possible_oms:
+        is_checked = st.sidebar.checkbox(om, value=om in st.session_state.selected_oms, key=f"cb_om_{om}")
+        if is_checked:
+            updated_oms.append(om)
+    st.session_state.selected_oms = updated_oms
+else:
+    st.sidebar.info("Zatiaľ nie sú načítané žiadne dáta z faktúr.")
+
+st.sidebar.divider()
+
+st.sidebar.subheader("🔍 Časové filtre")
 
 month_order = ['Január', 'Február', 'Marec', 'Apríl', 'Máj', 'Jún', 'Júl', 'August', 'September', 'Október', 'November', 'December']
 available_months = [m for m in month_order if not elec_df.empty and m in elec_df['Mesiac'].unique()]
@@ -324,28 +343,6 @@ selected_months = st.sidebar.multiselect(
 
 st.sidebar.divider()
 
-# --- EXCEL-LIKE VÝBER ODBERNÝCH MIEST V SIDEBARE ---
-st.sidebar.subheader("🏢 Odberné miesta (Filter)")
-if all_possible_oms:
-    # Tlačidlá na rýchle označenie / odznakečenie všetkých
-    col_s1, col_s2 = st.sidebar.columns(2)
-    if col_s1.button("Vybrať všetko"):
-        st.session_state.selected_oms = all_possible_oms
-    if col_s2.button("Zrušiť všetko"):
-        st.session_state.selected_oms = []
-
-    # Dynamické checkboxy pre každé odberné miesto (štýl Excel filtra)
-    updated_oms = []
-    for om in all_possible_oms:
-        is_checked = st.sidebar.checkbox(om, value=om in st.session_state.selected_oms, key=f"cb_om_{om}")
-        if is_checked:
-            updated_oms.append(om)
-    st.session_state.selected_oms = updated_oms
-else:
-    st.sidebar.info("Žiadne dáta zatiaľ nie sú dostupné.")
-
-st.sidebar.divider()
-
 st.sidebar.subheader("⚡ Rýchla navigácia")
 if st.sidebar.button("📉 Spotreby & Náklady", use_container_width=True, on_click=set_tab, args=(TAB_NAMES[0],)):
     pass
@@ -356,15 +353,9 @@ if st.sidebar.button("💶 Spotová cena kWh", use_container_width=True, on_clic
 if st.sidebar.button("📄 Analýza PDF Faktúr", use_container_width=True, on_click=set_tab, args=(TAB_NAMES[3],)):
     pass
 
-# Filtrovanie dát podľa zvoleného stavu
+# Filtrovanie dát
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy() if not fve_df.empty else pd.DataFrame()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy() if not elec_df.empty else pd.DataFrame()
-
-if selected_lokalita != "Všetky lokality":
-    if not filtered_fve.empty:
-        filtered_fve = filtered_fve[filtered_fve['Lokalita_raw'] == selected_lokalita]
-    if not filtered_elec.empty:
-        filtered_elec = filtered_elec[filtered_elec['Lokalita'] == selected_lokalita]
 
 if not filtered_elec.empty and st.session_state.selected_oms:
     filtered_elec = filtered_elec[filtered_elec['Odberné miesto'].isin(st.session_state.selected_oms)]
@@ -384,7 +375,7 @@ avg_price_per_kwh = (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else
 total_fve_kwh = filtered_fve['Vyroba_kWh'].sum() if not filtered_fve.empty else 0.0
 total_fve_eur = filtered_fve['Uspora_EUR'].sum() if not filtered_fve.empty else 0.0
 
-st.subheader(f"📊 Kľúčové ukazovatele 2026 ({selected_lokalita}) – Z faktúr")
+st.subheader("📊 Kľúčové ukazovatele 2026 (Z vybraných faktúr)")
 c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("🔌 Odber zo siete (Spolu)", f"{total_elec_kwh:,.0f} kWh")
@@ -399,7 +390,7 @@ selected_tab = st.radio("Zvoľ sekciu dashboardu:", TAB_NAMES, key='active_tab',
 st.divider()
 
 if selected_tab == TAB_NAMES[0]:
-    st.subheader(f"Mesačný vývoj spotreby a nákladov z faktúr ({selected_lokalita})")
+    st.subheader("Mesačný vývoj spotreby a nákladov z faktúr")
     if not filtered_elec.empty:
         col_left, col_right = st.columns(2)
         with col_left:
@@ -413,7 +404,7 @@ if selected_tab == TAB_NAMES[0]:
         st.info("Zatiaľ nie sú nahraté žiadne PDF faktúry alebo pre zvolené filtre neexistujú dáta.")
 
 elif selected_tab == TAB_NAMES[1]:
-    st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})")
+    st.subheader("☀️ Výkon a úspory FVE")
     if not filtered_fve.empty:
         summary_fve = filtered_fve.groupby('Lokalita_raw').agg({'Vyroba_kWh': 'sum', 'Uspora_EUR': 'sum', 'Podiel_Pokrytia_Pct': 'mean'}).reset_index()
 
@@ -440,7 +431,7 @@ elif selected_tab == TAB_NAMES[1]:
         st.info("FVE dáta nie sú k dispozícii.")
 
 elif selected_tab == TAB_NAMES[2]:
-    st.subheader(f"💶 Reálna spotová cena za 1 kWh z PDF faktúr ({selected_lokalita})")
+    st.subheader("💶 Reálna spotová cena za 1 kWh z PDF faktúr")
     st.markdown("Porovnanie čistej **silovej zložky (spotová cena komodity)** vs. **celkovej reálnej ceny vrátane distribúcie, poplatkov a pokút** vypočítanej priamo z nahratých faktúr.")
 
     if not filtered_elec.empty:
@@ -588,15 +579,4 @@ elif selected_tab == TAB_NAMES[3]:
         for idx, row in df_filtered_inv.iterrows():
             st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
             
-            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
-            c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
-            c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
-            c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
-            c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
-
-            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúry {row['Číslo faktúry (VS)']}"):
-                st.text(row['Raw_Text'])
-
-            st.divider()
-    else:
-        st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry alebo pre zvolené filtre neexistujú dáta.")
+            c_
