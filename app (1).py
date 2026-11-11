@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ PARSER ZSE FAKTÚR ---
+# --- PRESNÝ PARSER ZSE FAKTÚR VČÁTANE DISTRIBÚCIE ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -94,6 +94,7 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
+    # Silová zložka (komodita)
     silova_eur = extract_line_amount('1T za elektrinu')
 
     # Celková suma bez DPH
@@ -108,8 +109,21 @@ def parse_zse_pdf(pdf_path_or_file):
     if silova_eur == 0.0 and spolu_bez_dph > 0:
         silova_eur = spolu_bez_dph * 0.65
 
-    # Distribúcia celkom (všetko okrem silovej zložky ak nie je špecifikované inak, prípadne rozdiferencované)
-    distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
+    # --- SPOĽHLIVÉ ZISTENIE DISTRIBÚCIE ---
+    # Hľadáme riadok "Spolu bez DPH" pod sekciou Distribúcia, prípadne súčet distribučných položiek
+    distribucia_eur = 0.0
+    
+    # Pokus 1: Hľadať sumu pod hlavičkou Služba: Distribúcia
+    distrib_section_match = re.search(r'Služba:\s*Distribúcia.*?(?:Spolu bez DPH\s*([\d\s,]+)\s*€)', text, re.IGNORECASE | re.DOTALL)
+    if distrib_section_match:
+        try:
+            distribucia_eur = float(distrib_section_match.group(1).replace(" ", "").replace(",", "."))
+        except:
+            pass
+
+    # Pokus 2: Ak sa nenašlo, vypočítame to ako rozdiferencovanie celkovej sumy a silovej zložky
+    if distribucia_eur == 0.0 and spolu_bez_dph > 0:
+        distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
 
     # --- POKUTY A SANKČNÉ POLOŽKY ---
     mrk_prekrocenie = extract_line_amount('Tarifa za prekročenie MRK')
@@ -346,7 +360,7 @@ with tab3:
 
 # ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S GRAFOVÝM SÚMAROM A SANKCIAMI
 with tab4:
-    st.subheader("📄 Analýza komodity a sankčných poplatkov (MRK, Jalovina, Účinník) zo ZSE faktúr")
+    st.subheader("📄 Analýza komodity, distribúcie a sankčných poplatkov zo ZSE faktúr")
     st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}`.")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
@@ -415,7 +429,7 @@ with tab4:
                 )
                 fig_g2 = px.bar(
                     df_melt_penalties, x='Fakturačné obdobie', y='Suma (€)', color='Typ sankcie', barmode='group',
-                    title="Súhrn pokúf a sankcií (MRK, Jalovina, Účinník)",
+                    title="Súhrn pokút a sankcií (MRK, Jalovina, Účinník)",
                     template="plotly_dark"
                 )
                 st.plotly_chart(fig_g2, use_container_width=True)
@@ -432,13 +446,14 @@ with tab4:
                 
                 c_f1, c_f2, c_f3, c_f4 = st.columns(4)
                 c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
-                c_f2.metric("Prekročenie MRK", f"{row['Prekročenie MRK (€)']:,.2f} €", delta_color="inverse" if row['Prekročenie MRK (€)'] > 0 else "normal")
-                c_f3.metric("Jalová elektrina", f"{row['Jalová elektrina (€)']:,.2f} €", delta_color="inverse" if row['Jalová elektrina (€)'] > 0 else "normal")
-                c_f4.metric("Prirážka za účinník", f"{row['Prirážka za účinník (€)']:,.2f} €", delta_color="inverse" if row['Prirážka za účinník (€)'] > 0 else "normal")
+                c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
+                c_f3.metric("Prekročenie MRK", f"{row['Prekročenie MRK (€)']:,.2f} €", delta_color="inverse" if row['Prekročenie MRK (€)'] > 0 else "normal")
+                c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
 
-                # Koláčový graf pre komoditu a pokuty
+                # Koláčový graf pre komoditu, distribúciu a pokuty
                 cost_breakdown = {
                     "Silová zložka (Komodita)": row['Silová zložka (€)'],
+                    "Distribúcia celkom": row['Distribúcia celkom (€)'],
                     "Prekročenie MRK": row['Prekročenie MRK (€)'],
                     "Jalová elektrina": row['Jalová elektrina (€)'],
                     "Prirážka za účinník": row['Prirážka za účinník (€)']
@@ -449,7 +464,7 @@ with tab4:
                 if not df_break.empty:
                     fig_break = px.pie(
                         df_break, names='Položka', values='Suma (€)',
-                        title=f"Podiel komodity a sankčných poplatkov ({row['Odberné miesto']})",
+                        title=f"Podiel nákladov a sankcií ({row['Odberné miesto']})",
                         hole=0.4, template="plotly_dark"
                     )
                     fig_break.update_traces(textinfo='percent+label', textfont=dict(size=14, color='white'))
