@@ -37,15 +37,15 @@ st.markdown("Interaktívny nástroj pre vyhodnotenie spotreby elektriny, náklad
 # --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS ---
 EIC_MAP = {
     "24ZVS00007394912": {"nazov": "Trafostanica PEBEK", "lokalita": "Poprad"},
-    "24ZZS4000182286S": {"nazov": "Trafo Bratislava", "lokalita": "Bratislava"},
-    "24ZZS40001822865": {"nazov": "Trafo Bratislava", "lokalita": "Bratislava"},
+    "24ZZS4000182286S": {"nazov": "Bratislava – Trafo Feld", "lokalita": "Bratislava"},
+    "24ZZS40001822865": {"nazov": "Bratislava – Trafo Feld", "lokalita": "Bratislava"},
     "24ZVS0000016878H": {"nazov": "Beňovský Apartments", "lokalita": "Poprad"},
-    "24ZVS0000059036Q": {"nazov": "Areál / Nájomcovia (Poprad)", "lokalita": "Poprad"},
-    "24ZVS00000590360": {"nazov": "Areál / Nájomcovia (Poprad)", "lokalita": "Poprad"},
-    "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
+    "24ZVS0000059036Q": {"nazov": "Hlavný elektromer / Nájomcovia", "lokalita": "Poprad"},
+    "24ZVS00000590360": {"nazov": "Hlavný elektromer / Nájomcovia", "lokalita": "Poprad"},
+    "24ZVS0000787041D": {"nazov": "Trafostanica Haramia (Celkom)", "lokalita": "Poprad"}
 }
 
-# --- UNIVERZÁLNY A ROBUSTNÝ PARSER ZSE FAKTÚR ---
+# --- UNIVERZÁLNY A ROBUSTNÝ PARSER ZSE FAKTÚR (S KONTEXTOVÝM OKNOM) ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -67,16 +67,23 @@ def parse_zse_pdf(pdf_path_or_file):
     
     sort_date = obdobie_match.group(1).split('.') if obdobie_match else []
     sort_date_str = f"{sort_date[2]}-{sort_date[1]}-{sort_date[0]}" if len(sort_date) == 3 else "0000-00-00"
+    
+    month_map = {"01": "Január", "02": "Február", "03": "Marec", "04": "Apríl", "05": "Máj", "06": "Jún", "07": "Júl", "08": "August", "09": "September", "10": "Október", "11": "November", "12": "December"}
+    invoice_month = month_map.get(sort_date[1], "Neuvedené") if len(sort_date) == 3 else "Neuvedené"
 
-    def get_line_cost(keywords):
+    def get_cost_near_keyword(keywords):
         if isinstance(keywords, str):
             keywords = [keywords]
         
-        for line in text.split('\n'):
-            if any(kw.lower() in line.lower() for kw in keywords):
-                if any(x in line.lower() for x in ['technické údaje', 'stav', 'rozdiel', 'mes.nam']):
+        for kw in keywords:
+            # Hľadáme všetky výskyty kľúčového slova v texte
+            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
+            for pos in matches:
+                # Vezmeme okno textu (200 znakov za kľúčovým slovom)
+                window = text[pos:pos+200]
+                if any(x in window.lower() for x in ['technické údaje', 'stav']):
                     continue
-                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
@@ -105,13 +112,9 @@ def parse_zse_pdf(pdf_path_or_file):
                         pass
         return 0.0
 
-    # Spotreba kWh (podpora pre rôzne označenia komodity)
     silova_kwh = get_line_kwh(['1T za elektrinu', 'ČE 1T', 'Dodávka elektriny'])
+    silova_eur = get_cost_near_keyword(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special', 'ČE 1T'])
 
-    # Silová zložka - komodita (€)
-    silova_eur = get_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special', 'ČE 1T'])
-
-    # Distribúcia celkom (hľadáme sumu pod sekciou Distribúcia)
     distribucia_eur = 0.0
     distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
     if distrib_section:
@@ -125,15 +128,15 @@ def parse_zse_pdf(pdf_path_or_file):
             except:
                 pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY (Zoznam všetkých starých aj nových alternatívnych názvov) ---
-    mrk_prekrocenie = get_line_cost([
+    # --- POKUTY A SANKČNÉ POLOŽKY (s podporou pre flexibilné okno textu) ---
+    mrk_prekrocenie = get_cost_near_keyword([
         'Prekročenie maximálnej rezervovanej kapacity', 
         'Prekročenie rezervovanej kapacity', 
         'Tarifa za prekročenie MRK',
         'Prekročenie MRK'
     ])
     
-    jalovina = get_line_cost([
+    jalovina = get_cost_near_keyword([
         'Dodávka jalovej elektriny', 
         'Nevyžiad.dod.kapacitnej zložky jal.en.', 
         'Jalová elektrina',
@@ -141,7 +144,7 @@ def parse_zse_pdf(pdf_path_or_file):
         'Dodávka jalovej kapacitnej'
     ])
     
-    ucinnik = get_line_cost([
+    ucinnik = get_cost_near_keyword([
         'Prirážka za nedodržanie účinníka', 
         'Nedodržanie účinníka',
         'Prirážka za účinník',
@@ -150,7 +153,6 @@ def parse_zse_pdf(pdf_path_or_file):
     
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
-    # --- SKUTOČNÁ CELKOVÁ SUMA BEZ DPH ZO SÚHRNU FAKTÚRY ---
     spolu_bez_dph = 0.0
     rekap_match = re.search(r'(?:Základ dane celkom|Spolu bez DPH celkom|Celkom bez DPH).*?(\d{1,3}(?:\s?\d{3})*,\d{2})', text, re.IGNORECASE)
     if rekap_match:
@@ -170,6 +172,7 @@ def parse_zse_pdf(pdf_path_or_file):
         "Lokalita": om_info["lokalita"],
         "Číslo faktúry (VS)": vs_num,
         "Fakturačné obdobie": obdobie,
+        "Mesiac": invoice_month,
         "_sort_date": sort_date_str,
         "Spotreba (kWh)": silova_kwh,
         "Silová zložka (€)": silova_eur,
@@ -326,7 +329,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📉 Spotreby & Náklady Odberných Miest", 
     "☀️ Výkon Fotovoltiky (FVE)", 
     "💶 Jednotková cena za 1 kWh",
-    "📄 Analýza PDF Faktúr (ZSE)"
+    "📄 Analýza PDF Faktúr & Audit"
 ])
 
 with tab1:
@@ -384,9 +387,9 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR (S DEDUPLIKÁCIOU A RADENÍM OD JANUÁRA DO DECEMBRA)
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR A AUTOMATICKÁ KRÍŽOVÁ KONTROLA
 with tab4:
-    st.subheader("📄 Analýza komodity, distribúcie a sankčných poplatkov zo ZSE faktúr")
+    st.subheader("📄 Analýza PDF faktúr a automatický audit vs. Excel")
     st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}` (duplicity sú automaticky odfiltrované).")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
@@ -410,30 +413,60 @@ with tab4:
 
         if parsed_results:
             df_invoices = pd.DataFrame(parsed_results)
-
-            # --- DEDUPLIKÁCIA: ODSTRÁNENIE ROVNAKÝCH FAKTÚR ---
             df_invoices = df_invoices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
 
             st.divider()
             
+            # --- AUTOMATICKÁ KRÍŽOVÁ KONTROLA (PDF vs EXCEL) ---
+            st.markdown("### 🔍 Automatická krížová kontrola (PDF vs. Excel)")
+            st.markdown("Porovnanie nákladov bez DPH vyťažených z nahratých PDF faktúr oproti hodnotám zapísaným v Exceli (`Spotreby energií.xlsx`).")
+
+            audit_records = []
+            for _, inv in df_invoices.iterrows():
+                om = inv['Odberné miesto']
+                m = inv['Mesiac']
+                pdf_val = inv['Spolu bez DPH (€)']
+
+                match_row = elec_df[(elec_df['Odberné miesto'] == om) & (elec_df['Mesiac'] == m)]
+                
+                if not match_row.empty:
+                    excel_val = match_row['Náklady (€)'].values[0]
+                    diff = pdf_val - excel_val
+                    status = "✅ V poriadku" if abs(diff) < 1.0 else "⚠️ Rozdiel"
+                else:
+                    excel_val = 0.0
+                    diff = pdf_val
+                    status = "❓ Chýba v Exceli"
+
+                audit_records.append({
+                    "Odberné miesto": om,
+                    "Mesiac": m,
+                    "Číslo faktúry (VS)": inv['Číslo faktúry (VS)'],
+                    "PDF Spolu bez DPH (€)": pdf_val,
+                    "Excel Náklady (€)": excel_val,
+                    "Rozdiel (€)": diff,
+                    "Stav kontroly": status
+                })
+
+            df_audit = pd.DataFrame(audit_records)
+            st.dataframe(df_audit, use_container_width=True, hide_index=True)
+
+            st.divider()
+            
             # --- FILTER NA KONKRÉTNE ODBERNÉ MIESTO ---
-            st.markdown("### 🔍 Filter odberných miest")
+            st.markdown("### 🔍 Filter odberných miest pre podrobnú analýzu")
             unique_oms = ["Všetky odberné miesta"] + list(df_invoices['Odberné miesto'].unique())
-            selected_single_om = st.selectbox("Vyber konkrétne odberné miesto pre detailnú analýzu:", options=unique_oms)
+            selected_single_om = st.selectbox("Vyber konkrétne odberné miesto:", options=unique_oms)
 
             if selected_single_om != "Všetky odberné miesta":
                 df_filtered_inv = df_invoices[df_invoices['Odberné miesto'] == selected_single_om].copy()
             else:
                 df_filtered_inv = df_invoices.copy()
 
-            # --- CHRONOLOGICKÉ RADENIE OD JANUÁRA DO DECEMBRA ---
             df_filtered_inv = df_filtered_inv.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
 
             st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
 
-            # ==========================================
-            # SÚHRNNÉ GRAFY NA ZAČIATKU ZÁLOŽKY
-            # ==========================================
             st.markdown("### 📈 Súhrnný prehľad načítaných faktúr (Zoradené od januára do decembra)")
             
             col_g1, col_g2 = st.columns(2)
@@ -466,7 +499,7 @@ with tab4:
 
             st.divider()
             
-            display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date"]]
+            display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac"]]
             st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
 
             st.divider()
