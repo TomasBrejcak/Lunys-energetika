@@ -45,9 +45,10 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- UNIVERZÁLNY A ROBUSTNÝ PARSER ZSE FAKTÚR ---
-def parse_zse_pdf(pdf_path_or_file):
-    with pdfplumber.open(pdf_path_or_file) as pdf:
+# --- OPTIMALIZOVANÝ A CACHOVANÝ PARSER ZSE FAKTÚR ---
+@st.cache_data
+def parse_zse_pdf(pdf_path):
+    with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
 
     # 1. Detekcia EIC kódu
@@ -394,7 +395,7 @@ c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
 
 st.divider()
 
-# SYNCHRONIZOVANÉ PREPÍNANIE SEKCÍ (Rovnaký stav pre sidebar aj horný výber)
+# SYNCHRONIZOVANÉ PREPÍNANIE SEKCÍ
 selected_tab = st.radio("Zvoľ sekciu dashboardu:", TAB_NAMES, key='active_tab', horizontal=True, label_visibility="collapsed")
 st.divider()
 
