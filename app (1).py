@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ A BEZPEČNÝ PARSER ZSE FAKTÚR ---
+# --- UNIVERZÁLNY A ROBUSTNÝ PARSER ZSE FAKTÚR ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -60,6 +60,9 @@ def parse_zse_pdf(pdf_path_or_file):
     vs_num = vs_match.group(1) if vs_match else "Neuvedené"
 
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
+    if not obdobie_match:
+        obdobie_match = re.search(r'(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
+
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
     
     sort_date = obdobie_match.group(1).split('.') if obdobie_match else []
@@ -78,15 +81,17 @@ def parse_zse_pdf(pdf_path_or_file):
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
                         val = float(val_str)
-                        if 0 <= val < 100000:
+                        if 0 <= val < 1000000:
                             return val
                     except:
                         pass
         return 0.0
 
     def get_line_kwh(keyword):
+        if isinstance(keyword, str):
+            keyword = [keyword]
         for line in text.split('\n'):
-            if keyword.lower() in line.lower():
+            if any(kw.lower() in line.lower() for kw in keyword):
                 if 'technické údaje' in line.lower():
                     continue
                 m = re.search(r'([\d\s,]+)\s*kWh', line, re.IGNORECASE)
@@ -100,12 +105,11 @@ def parse_zse_pdf(pdf_path_or_file):
                         pass
         return 0.0
 
-    silova_kwh = get_line_kwh('1T za elektrinu')
-    if silova_kwh == 0.0:
-        silova_kwh = get_line_kwh('ČE 1T')
+    # Spotreba kWh (podpora pre rôzne označenia komodity)
+    silova_kwh = get_line_kwh(['1T za elektrinu', 'ČE 1T', 'Dodávka elektriny'])
 
-    # Silová zložka
-    silova_eur = get_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special'])
+    # Silová zložka - komodita (€)
+    silova_eur = get_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special', 'ČE 1T'])
 
     # Distribúcia celkom (hľadáme sumu pod sekciou Distribúcia)
     distribucia_eur = 0.0
@@ -116,15 +120,34 @@ def parse_zse_pdf(pdf_path_or_file):
         if nums:
             try:
                 val = float(nums[-1].replace(" ", "").replace(",", "."))
-                if val < 100000:
+                if val < 1000000:
                     distribucia_eur = val
             except:
                 pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY ---
-    mrk_prekrocenie = get_line_cost(['Tarifa za prekročenie MRK', 'Prekročenie rezervovanej kapacity', 'Prekročenie maximálnej rezervovanej kapacity'])
-    jalovina = get_line_cost(['Dodávka jalovej elektriny', 'Nevyžiad.dod.kapacitnej zložky jal.en.'])
-    ucinnik = get_line_cost('Prirážka za nedodržanie účinníka')
+    # --- POKUTY A SANKČNÉ POLOŽKY (Zoznam všetkých starých aj nových alternatívnych názvov) ---
+    mrk_prekrocenie = get_line_cost([
+        'Prekročenie maximálnej rezervovanej kapacity', 
+        'Prekročenie rezervovanej kapacity', 
+        'Tarifa za prekročenie MRK',
+        'Prekročenie MRK'
+    ])
+    
+    jalovina = get_line_cost([
+        'Dodávka jalovej elektriny', 
+        'Nevyžiad.dod.kapacitnej zložky jal.en.', 
+        'Jalová elektrina',
+        'Dodávka jalovej induktívnej',
+        'Dodávka jalovej kapacitnej'
+    ])
+    
+    ucinnik = get_line_cost([
+        'Prirážka za nedodržanie účinníka', 
+        'Nedodržanie účinníka',
+        'Prirážka za účinník',
+        'Účinník'
+    ])
+    
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
     # --- SKUTOČNÁ CELKOVÁ SUMA BEZ DPH ZO SÚHRNU FAKTÚRY ---
@@ -133,7 +156,7 @@ def parse_zse_pdf(pdf_path_or_file):
     if rekap_match:
         try:
             val = float(rekap_match.group(1).replace(" ", "").replace(",", "."))
-            if 0 < val < 100000:
+            if 0 < val < 1000000:
                 spolu_bez_dph = val
         except:
             pass
