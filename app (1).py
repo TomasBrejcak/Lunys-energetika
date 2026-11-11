@@ -42,7 +42,7 @@ EIC_MAP = {
     "24ZVS0000016878H": {"nazov": "Beňovský Apartments", "lokalita": "Poprad"},
     "24ZVS0000059036Q": {"nazov": "Hlavný elektromer / Nájomcovia", "lokalita": "Poprad"},
     "24ZVS00000590360": {"nazov": "Hlavný elektromer / Nájomcovia", "lokalita": "Poprad"},
-    "24ZVS0000787041D": {"nazov": "Trafostanica Haramia (Celkom)", "lokalita": "Poprad"}
+    "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
 # --- PRESNÝ A BEZPEČNÝ PARSER ZSE FAKTÚR ---
@@ -89,17 +89,13 @@ def parse_zse_pdf(pdf_path_or_file):
                         pass
         return 0.0
 
-    def get_cost_near_keyword(keywords):
-        if isinstance(keywords, str):
-            keywords = [keywords]
-        
-        for kw in keywords:
-            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
-            for pos in matches:
-                window = text[pos:pos+150]
-                if any(x in window.lower() for x in ['technické údaje', 'stav']):
+    def get_penalty_cost(keyword):
+        # Hľadá presný riadok sankcie v tabuľke rozpisu
+        for line in text.split('\n'):
+            if keyword.lower() in line.lower():
+                if any(x in line.lower() for x in ['technické údaje', 'stav']):
                     continue
-                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
@@ -130,14 +126,24 @@ def parse_zse_pdf(pdf_path_or_file):
 
     silova_kwh = get_line_kwh(['1T za elektrinu', 'ČE 1T', 'Dodávka elektriny'])
     
-    # Silová zložka zo sumáru
+    # Silová zložka (komodita) zo súhrnu
     silova_eur = get_exact_line_cost(['Dodávka elektriny'])
     if silova_eur == 0.0:
         silova_eur = get_exact_line_cost(['1T za elektrinu', 'Register-Special', 'ČE 1T'])
 
-    # Distribúcia celkom primárne zo sumáru (vyhne sa zámene s položkami v tabuľke)
-    distribucia_eur = get_exact_line_cost(['Distribúcia elektriny'])
+    # Celková distribúcia výhradne zo sumárového bloku na konci faktúry (napr. "Sumár za miesto spotreby" alebo "Sumár za faktúru")
+    distribucia_eur = 0.0
+    sumar_section = re.search(r'(?:Sumár za miesto spotreby|Sumár za faktúru).*?(?=Suma spolu|$)', text, re.IGNORECASE | re.DOTALL)
+    if sumar_section:
+        distrib_match = re.search(r'Distribúcia elektriny[^\d]*([\d\s]+,\d{2})\s*€', sumar_section.group(0), re.IGNORECASE)
+        if distrib_match:
+            try:
+                distribucia_eur = float(distrib_match.group(1).replace(" ", "").replace(",", "."))
+            except:
+                pass
+
     if distribucia_eur == 0.0:
+        # Fallback pre iný tvar faktúry
         distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
         if distrib_section:
             match_sum = re.search(r'Spolu bez DPH\s*([\d\s]+,\d{2})\s*€', distrib_section.group(1), re.IGNORECASE)
@@ -147,29 +153,19 @@ def parse_zse_pdf(pdf_path_or_file):
                 except:
                     pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY ---
-    mrk_prekrocenie = get_cost_near_keyword([
-        'Prekročenie maximálnej rezervovanej kapacity', 
-        'Prekročenie rezervovanej kapacity', 
-        'Tarifa za prekročenie MRK',
-        'Prekročenie MRK'
-    ])
-    
-    jalovina = get_cost_near_keyword([
-        'Dodávka jalovej elektriny', 
-        'Nevyžiad.dod.kapacitnej zložky jal.en.', 
-        'Jalová elektrina',
-        'Dodávka jalovej induktívnej',
-        'Dodávka jalovej kapacitnej'
-    ])
-    
-    ucinnik = get_cost_near_keyword([
-        'Prirážka za nedodržanie účinníka', 
-        'Nedodržanie účinníka',
-        'Prirážka za účinník',
-        'Účinník'
-    ])
-    
+    # --- POKUTY A SANKČNÉ POLOŽKY (Bezpečné vyhľadávanie v položkách) ---
+    mrk_prekrocenie = get_penalty_cost('Prekročenie maximálnej rezervovanej kapacity')
+    if mrk_prekrocenie == 0.0:
+        mrk_prekrocenie = get_penalty_cost('Prekročenie rezervovanej kapacity')
+
+    jalovina = get_penalty_cost('Dodávka jalovej elektriny')
+    if jalovina == 0.0:
+        jalovina = get_penalty_cost('Jalová elektrina')
+
+    ucinnik = get_penalty_cost('Prirážka za nedodržanie účinníka')
+    if ucinnik == 0.0:
+        ucinnik = get_penalty_cost('Účinník')
+
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
     spolu_bez_dph = 0.0
@@ -251,9 +247,9 @@ def load_data():
                 elif "zemiakareň" in raw_lower:
                     clean_name = "Zemiakareň"
                 elif "haramia" in raw_lower or "nové trafo" in raw_lower:
-                    clean_name = "Trafostanica Haramia (Celkom)"
+                    clean_name = "Trafostanica HARAMIA"
                 elif "pebek" in raw_lower or "staré trafo" in raw_lower:
-                    clean_name = "Trafostanica Pebek (Celkom)"
+                    clean_name = "Trafostanica PEBEK"
                 elif "skladová hala" in raw_lower:
                     clean_name = "Skladová hala I."
                 elif "ab správa" in raw_lower:
@@ -261,7 +257,7 @@ def load_data():
                 elif "beňovský" in raw_lower:
                     clean_name = "Beňovský Apartments"
                 elif "nájomcovia" in raw_lower or "arál" in raw_lower:
-                    clean_name = "Hlavný elektromer / Nájomcovia"
+                    clean_name = "Areál / Nájomcovia (Poprad)"
                 else:
                     clean_name = combined_text.replace("spotreba", "").replace("kWh", "").replace("k kWh", "").strip().capitalize()
             
