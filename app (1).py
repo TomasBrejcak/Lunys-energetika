@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- ROBUSTNÁ FUNKCIA PRE PARSOVANIE ZSE PDF FAKTÚR ---
+# --- PARSER Zameraný na Komoditu, RK, MRK a Jalovinu / Pokuty ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -75,64 +75,39 @@ def parse_zse_pdf(pdf_path_or_file):
                 continue
         return default
 
-    # 3. Spotreba v kWh
+    # Spotreba v kWh
     silova_kwh = safe_extract([
         r'1T za elektrinu\s*([\d\s,]+)\s*kWh',
         r'spotreba.*?([\d\s,]+)\s*kWh',
         r'([\d\s,]+)\s*kWh\s*0,\d+'
     ])
 
-    # 4. Hlavné súhrnné sumy a detailné položky distribúcie
+    # Silová zložka (komodita)
     silova_eur = safe_extract([
         r'Dodávka elektriny\s*([\d\s,]+)\s*€',
         r'Dodávka elektriny\s*\n\s*([\d\s,]+)\s*€',
         r'Dodávka elektriny\s+([\d\s,]+)'
     ])
 
-    distribucia_eur = safe_extract([
-        r'Distribúcia elektriny\s*([\d\s,]+)\s*€',
-        r'Distribúcia elektriny\s*\n\s*([\d\s,]+)\s*€',
-        r'Distribúcia elektriny\s+([\d\s,]+)'
-    ])
-
-    # Detailné zložky s rozšírenými vzormi z faktúr ZSE
-    pevna_distr = safe_extract([
-        r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€',
+    # Sankčné položky a špecifické poplatky (RK, MRK, Jalovina)
+    rk_poplatok = safe_extract([
         r'Rezervovaná kapacita.*?([\d\s,]+)\s*€',
-        r'Pevná zložka.*?([\d\s,]+)\s*€'
+        r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€'
     ])
     
-    var_distr = safe_extract([
-        r'Var\.zložka tarify za distr.*?([\d\s,]+)\s*€',
-        r'Variabilná zložka tarify za distribúciu.*?([\d\s,]+)\s*€'
-    ])
-    
-    straty_distr = safe_extract([
-        r'Tarifa za distribučné straty.*?([\d\s,]+)\s*€',
-        r'Platba za straty elektr\.pri distr\.el.*?([\d\s,]+)\s*€',
-        r'straty elektr.*?([\d\s,]+)\s*€'
-    ])
-    
-    jadro_fon = safe_extract([
-        r'Tarifa za odvod do jadrového fondu.*?([\d\s,]+)\s*€',
-        r'odvod do jadrového fondu.*?([\d\s,]+)\s*€'
-    ])
-    
-    sistem_sluzby = safe_extract([
-        r'Platba za systémové služby.*?([\d\s,]+)\s*€'
-    ])
-    
-    prevadzka_sist = safe_extract([
-        r'Platba za prevádzkovanie systému.*?([\d\s,]+)\s*€'
+    mrk_prekrocenie = safe_extract([
+        r'Prekročenie rezervovanej kapacity.*?([\d\s,]+)\s*€',
+        r'MRK.*?([\d\s,]+)\s*€',
+        r'Prekročenie mesačnej rezervovanej kapacity.*?([\d\s,]+)\s*€'
     ])
     
     jalovina = safe_extract([
         r'Nevyžiad\.dod\.kapacitnej zložky jal\.en.*?([\d\s,]+)\s*€',
         r'Dodávka jalovej elektriny.*?([\d\s,]+)\s*€',
-        r'jal\.en\..*?([\d\s,]+)\s*€'
+        r'jal\.en\..*?([\d\s,]+)\s*€',
+        r'Nedodržanie účinníka.*?([\d\s,]+)\s*€'
     ])
 
-    # 5. Celkové sumy faktúry
     spolu_bez_dph = safe_extract([
         r'Spolu za združ\.dod\.elektriny\s*([\d\s,]+)',
         r'Suma spolu\s*([\d\s,]+)\s*€',
@@ -142,12 +117,8 @@ def parse_zse_pdf(pdf_path_or_file):
     dph = safe_extract([r'DPH\s*([\d\s,]+)\s*€', r'19,00\s*([\d\s,]+)\s*([\d\s,]+)\s*€'])
     spolu_s_dph = safe_extract([r'Suma na úhradu.*?([\d\s,]+)\s*€', r'Nedoplatok.*?([\d\s,]+)\s*€'])
 
-    # Inteligentné doplnenie, ak niektoré podružné sumy chýbajú
-    if distribucia_eur == 0.0:
-        distribucia_eur = pevna_distr + var_distr + straty_distr + jadro_fon + sistem_sluzby + prevadzka_sist + jalovina
-
-    if spolu_bez_dph == 0.0:
-        spolu_bez_dph = silova_eur + distribucia_eur
+    if silova_eur == 0.0 and spolu_bez_dph > 0:
+        silova_eur = spolu_bez_dph * 0.65
 
     return {
         "EIC": eic_code,
@@ -157,14 +128,9 @@ def parse_zse_pdf(pdf_path_or_file):
         "Fakturačné obdobie": obdobie,
         "Spotreba (kWh)": silova_kwh,
         "Silová zložka (€)": silova_eur,
-        "Distribúcia celkom (€)": distribucia_eur,
-        "Pevná zložka (ističe/kapacita) (€)": pevna_distr,
-        "Variabilná distribúcia (€)": var_distr,
-        "Distribučné straty (€)": straty_distr,
-        "Jadrový fond (€)": jadro_fon,
-        "Systémové služby (€)": sistem_sluzby,
-        "Prevádzkovanie systému (€)": prevadzka_sist,
-        "Jalová elektrina (€)": jalovina,
+        "Rezervovaná kapacita (RK) (€)": rk_poplatok,
+        "Prekročenie kapacity (MRK) (€)": mrk_prekrocenie,
+        "Jalovina / Účinník (€)": jalovina,
         "Spolu bez DPH (€)": spolu_bez_dph,
         "DPH (€)": dph,
         "Spolu s DPH (€)": spolu_s_dph
@@ -349,12 +315,11 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: AUTOMATICKÉ PARSOVANIE PDF FAKTÚR Z PRIEČINKA A UPLOADU
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S FILtrom A SANKCIAMI
 with tab4:
-    st.subheader("📄 Automatická analýza a parsovanie ZSE faktúr")
-    st.markdown(f"Systém automaticky číta faktúry z trvalého priečinka `/{INVOICE_DIR}` alebo ich môžeš nahrať dodatočne tu:")
+    st.subheader("📄 Analýza komodity a sankčných poplatkov (RK, MRK, Jalovina) zo ZSE faktúr")
+    st.markdown(f"Faktúry sú načítavané priamo z trvalého priečinka `/{INVOICE_DIR}`. Nové PDF môžeš pridať aj potiahnutím nižšie:")
 
-    # Uloženie nahratých súborov priamo do priečinka faktury_zse
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
     if uploaded_files:
         for uploaded_file in uploaded_files:
@@ -363,7 +328,6 @@ with tab4:
                 f.write(uploaded_file.getbuffer())
         st.success(f"Úspešne uložených {len(uploaded_files)} súborov do priečinka `{INVOICE_DIR}`.")
 
-    # Prečítanie všetkých PDF zo serverového priečinka
     all_pdf_files = [os.path.join(INVOICE_DIR, f) for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
 
     if all_pdf_files:
@@ -377,34 +341,48 @@ with tab4:
 
         if parsed_results:
             df_invoices = pd.DataFrame(parsed_results)
-            st.success(f"Načítaných faktúr zo systému: {len(df_invoices)}")
-            
-            st.markdown("### 📊 Extrahované údaje z faktúr vrátane distribúcie")
-            st.dataframe(df_invoices, use_container_width=True, hide_index=True)
 
             st.divider()
             
-            for idx, row in df_invoices.iterrows():
+            # --- FILTER NA KONKRÉTNE ODBERNÉ MIESTO ---
+            st.markdown("### 🔍 Filter odberných miest")
+            unique_oms = ["Všetky odberné miesta"] + list(df_invoices['Odberné miesto'].unique())
+            selected_single_om = st.selectbox("Vyber konkrétne odberné miesto pre detailnú analýzu:", options=unique_oms)
+
+            if selected_single_om != "Všetky odberné miesta":
+                df_filtered_inv = df_invoices[df_invoices['Odberné miesto'] == selected_single_om]
+            else:
+                df_filtered_inv = df_invoices
+
+            st.success(f"Zobrazených faktúr: {len(df_filtered_inv)}")
+            
+            st.markdown("### 📊 Prehľad komodity a sankcií (RK, MRK, Jalovina)")
+            st.dataframe(df_filtered_inv, use_container_width=True, hide_index=True)
+
+            st.divider()
+            
+            for idx, row in df_filtered_inv.iterrows():
                 st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
                 
                 c_f1, c_f2, c_f3, c_f4 = st.columns(4)
                 c_f1.metric("Spotreba elektriny", f"{row['Spotreba (kWh)']:,.0f} kWh")
                 c_f2.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
-                c_f3.metric("Distribúcia & Poplatky", f"{row['Distribúcia celkom (€)']:,.2f} €")
                 
-                jal_val = row['Jalová elektrina (€)']
-                c_f4.metric("Jalová elektrina", f"{jal_val:,.2f} €", delta_color="inverse" if jal_val > 0 else "normal")
+                rk_val = row['Rezervovaná kapacita (RK) (€)']
+                c_f3.metric("Rezervovaná kapacita (RK)", f"{rk_val:,.2f} €")
+                
+                mrk_val = row['Prekročenie kapacity (MRK) (€)']
+                jal_val = row['Jalovina / Účinník (€)']
+                
+                total_sankcie = mrk_val + jal_val
+                c_f4.metric("Prekročenie MRK + Jalovina", f"{total_sankcie:,.2f} €", delta_color="inverse" if total_sankcie > 0 else "normal")
 
-                # Detailný rozpad pre koláčový graf
+                # Koláčový graf zameraný na komoditu a pokuty/kapacity
                 cost_breakdown = {
-                    "Silová zložka": row['Silová zložka (€)'],
-                    "Pevná zložka (ističe/kapacita)": row['Pevná zložka (ističe/kapacita) (€)'],
-                    "Variabilná distribúcia": row['Variabilná distribúcia (€)'],
-                    "Distribučné straty": row['Distribučné straty (€)'],
-                    "Jadrový fond": row['Jadrový fond (€)'],
-                    "Systémové služby": row['Systémové služby (€)'],
-                    "Prevádzkovanie systému": row['Prevádzkovanie systému (€)'],
-                    "Jalová elektrina": row['Jalová elektrina (€)']
+                    "Silová zložka (Komodita)": row['Silová zložka (€)'],
+                    "Rezervovaná kapacita (RK)": row['Rezervovaná kapacita (RK) (€)'],
+                    "Prekročenie kapacity (MRK)": row['Prekročenie kapacity (MRK) (€)'],
+                    "Jalová elektrina / Účinník": row['Jalovina / Účinník (€)']
                 }
                 
                 df_break = pd.DataFrame([{"Položka": k, "Suma (€)": v} for k, v in cost_breakdown.items() if v > 0])
@@ -412,11 +390,11 @@ with tab4:
                 if not df_break.empty:
                     fig_break = px.pie(
                         df_break, names='Položka', values='Suma (€)',
-                        title=f"Detailný rozpad nákladov ({row['Odberné miesto']})",
+                        title=f"Podiel komodity a sankčných poplatkov ({row['Odberné miesto']})",
                         hole=0.4, template="plotly_dark"
                     )
                     fig_break.update_traces(textinfo='percent+label', textfont=dict(size=14, color='white'))
                     st.plotly_chart(fig_break, use_container_width=True)
                 st.divider()
     else:
-        st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry. Pretiahni ich vyššie alebo ich ulož do daného priečinka.")
+        st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry. Pretiahni ich vyššie alebo ulož do daného priečinka.")
