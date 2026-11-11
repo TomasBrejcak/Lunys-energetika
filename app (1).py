@@ -322,8 +322,8 @@ except Exception as e:
     st.error(f"Chyba pri načítaní Excel súboru: {e}")
     st.stop()
 
-# --- FILTRE A RYCHLE ODKAZY V SIDEBARE ---
-st.sidebar.subheader("🔍 Filtre")
+# --- STYLING & INTERAKTÍVNA NAVIGÁCIA V SIDEBARE ---
+st.sidebar.subheader("🔍 Filtre & Ovládanie")
 
 selected_lokalita = st.sidebar.selectbox(
     "📍 Vyber lokalitu",
@@ -339,15 +339,19 @@ selected_months = st.sidebar.multiselect(
 
 st.sidebar.divider()
 
-# RÝCHLA NAVIGÁCIA V SIDEBARE (Fixne dostupná aj pri odrolovaní)
-st.sidebar.subheader("🚀 Rýchla navigácia")
-st.sidebar.markdown("""
-* [📉 Spotreby & Náklady](#spotreby-n-klady-odbern-ch-miest)
-* [☀️ Výkon Fotovoltiky (FVE)](#v-kon-a-spory-fve)
-* [💶 Jednotková cena za 1 kWh](#jednotkov-cena-za-1-kwh)
-* [📄 Analýza PDF Faktúr](#anal-za-pdf-fakt-r-zo-zse)
-* [🔍 Krížová kontrola (PDF vs. Excel)](#kr-ov-kontrola-pdf-vs-excel)
-""")
+# Stav pre prepínanie záložiek cez bočné tlačidlá
+if 'active_tab' not in st.session_state:
+    st.session_state.active_tab = 0
+
+st.sidebar.subheader("⚡ Rýchla navigácia")
+if st.sidebar.button("📉 Spotreby & Náklady", use_container_width=True):
+    st.session_state.active_tab = 0
+if st.sidebar.button("☀️ Výkon FVE", use_container_width=True):
+    st.session_state.active_tab = 1
+if st.sidebar.button("💶 Jednotková cena kWh", use_container_width=True):
+    st.session_state.active_tab = 2
+if st.sidebar.button("📄 Analýza PDF Faktúr", use_container_width=True):
+    st.session_state.active_tab = 3
 
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy()
 filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy()
@@ -379,15 +383,19 @@ c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
 
 st.divider()
 
-tab1, tab2, tab3, tab4 = st.tabs([
+# Hlavné záložky spojené so session_state pre tlačidlá v sidebare
+tabs = st.tabs([
     "📉 Spotreby & Náklady Odberných Miest", 
     "☀️ Výkon Fotovoltiky (FVE)", 
     "💶 Jednotková cena za 1 kWh",
     "📄 Analýza PDF Faktúr & Audit"
 ])
 
-with tab1:
-    st.subheader(f"Mesačný vývoj spotreby a nákladov ({selected_lokalita})", anchor="spotreby-n-klady-odbern-ch-miest")
+# Ak bolo kliknuté na tlačidlo v sidebare, Streamlit prepne záložku
+current_tab = st.session_state.get('active_tab', 0)
+
+with tabs[0]:
+    st.subheader(f"Mesačný vývoj spotreby a nákladov ({selected_lokalita})")
     all_om = list(filtered_elec['Odberné miesto'].unique())
     selected_om = st.multiselect("Vyber odberné miesta pre zobrazenie v grafoch:", options=all_om, default=all_om, key="om_filter_tab1")
     sub_elec = filtered_elec[filtered_elec['Odberné miesto'].isin(selected_om)]
@@ -402,8 +410,8 @@ with tab1:
             st.plotly_chart(fig_elec_eur, use_container_width=True)
     st.dataframe(filtered_elec, use_container_width=True, hide_index=True)
 
-with tab2:
-    st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})", anchor="v-kon-a-spory-fve")
+with tabs[1]:
+    st.subheader(f"☀️ Výkon a úspory FVE ({selected_lokalita})")
     summary_fve = filtered_fve.groupby('Lokalita_raw').agg({'Vyroba_kWh': 'sum', 'Uspora_EUR': 'sum', 'Podiel_Pokrytia_Pct': 'mean'}).reset_index()
 
     pie_labels_kwh = []
@@ -426,8 +434,8 @@ with tab2:
 
     st.dataframe(filtered_fve, use_container_width=True, hide_index=True)
 
-with tab3:
-    st.subheader(f"Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh) – {selected_lokalita}", anchor="jednotkov-cena-za-1-kwh")
+with tabs[2]:
+    st.subheader(f"Porovnanie a vývoj jednotkovej ceny elektriny (€ / kWh) – {selected_lokalita}")
     if not filtered_elec.empty:
         fig_price_trend = px.line(filtered_elec, x='Mesiac', y='Cena (€/kWh)', color='Odberné miesto', markers=True, title="Vývoj ceny 1 kWh podľa odberných miest", template="plotly_dark")
         st.plotly_chart(fig_price_trend, use_container_width=True)
@@ -442,8 +450,8 @@ with tab3:
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
 # ZÁLOŽKA 4: PRESNE PODĽA POŽADOVANEJ STRUKTÚRY
-with tab4:
-    st.subheader("📄 Analýza PDF faktúr zo ZSE", anchor="anal-za-pdf-fakt-r-zo-zse")
+with tabs[3]:
+    st.subheader("📄 Analýza PDF faktúr zo ZSE")
     
     all_pdf_files = [os.path.join(INVOICE_DIR, f) for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
 
@@ -475,7 +483,7 @@ with tab4:
 
             st.divider()
 
-            # 2. KOLÁČOVÉ GRAFY POD FILTROM (S TUČNOU SUMOU SPOLU)
+            # 2. KOLÁČOVÉ GRAFY POD FILTROM (ČISTÉ POPISKY + TUČNÉ SUMY)
             st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií")
             col_g1, col_g2 = st.columns(2)
             
@@ -582,7 +590,7 @@ with tab4:
                 st.divider()
 
             # 6. TABUĽKA KRÍŽOVEJ KONTROLY (PDF vs EXCEL) NA ÚPLNOM KONCI
-            st.markdown("### 🔍 Krížová kontrola (PDF vs. Excel)", anchor="kr-ov-kontrola-pdf-vs-excel")
+            st.markdown("### 🔍 Krížová kontrola (PDF vs. Excel)")
             st.markdown("Porovnanie nákladov bez DPH vyťažených z nahratých PDF faktúr oproti hodnotám zapísaným v Exceli (`Spotreby energií.xlsx`).")
 
             audit_records = []
