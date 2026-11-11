@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ PARSER ZSE FAKTÚR VČÁTANE DISTRIBÚCIE ---
+# --- PRESNÝ PARSER ZSE FAKTÚR ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -62,8 +62,9 @@ def parse_zse_pdf(pdf_path_or_file):
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
 
-    def extract_line_amount(item_name):
-        pattern = re.escape(item_name) + r'.*?([\d\s]+,\d{2})\s*(?:€)?\s*$'
+    def extract_table_amount(line_start_text):
+        """Vyťahuje koncovú sumu v eurách z riadku začínajúceho daným textom"""
+        pattern = re.escape(line_start_text) + r'.*?([\d\s]+,\d{2})\s*(?:€)?\s*$'
         m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if m:
             val_str = m.group(1).replace(" ", "").replace(",", ".")
@@ -71,19 +72,10 @@ def parse_zse_pdf(pdf_path_or_file):
                 return float(val_str)
             except:
                 pass
-        
-        pattern_alt = re.escape(item_name) + r'.*?(\d{1,3}(?:\s?\d{3})*,\d{2})'
-        m_alt = re.search(pattern_alt, text, re.IGNORECASE | re.DOTALL)
-        if m_alt:
-            val_str = m_alt.group(1).replace(" ", "").replace(",", ".")
-            try:
-                return float(val_str)
-            except:
-                pass
         return 0.0
 
-    # Spotreba v kWh
-    kwh_match = re.search(r'1T za elektrinu\s*([\d\s,]+)\s*kWh', text, re.IGNORECASE)
+    # Spotreba v kWh (hľadáme množstvo pri 1T)
+    kwh_match = re.search(r'1T za elektrinu\s+([\d\s,]+)\s*kWh', text, re.IGNORECASE)
     if not kwh_match:
         kwh_match = re.search(r'ČE 1T vrát\.str reg\.mer-účt\..*?([\d\s,]+)\s*kWh', text, re.IGNORECASE)
     
@@ -94,10 +86,10 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
-    # Silová zložka (komodita)
-    silova_eur = extract_line_amount('1T za elektrinu')
+    # Silová zložka v EUR (suma z riadku 1T za elektrinu)
+    silova_eur = extract_table_amount('1T za elektrinu')
 
-    # Celková suma bez DPH
+    # Celková suma bez DPH pre celú faktúru
     spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
     spolu_bez_dph = 0.0
     if spolu_match:
@@ -106,37 +98,35 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
-    if silova_eur == 0.0 and spolu_bez_dph > 0:
-        silova_eur = spolu_bez_dph * 0.65
-
-    # --- SPOĽHLIVÉ ZISTENIE DISTRIBÚCIE ---
-    # Hľadáme riadok "Spolu bez DPH" pod sekciou Distribúcia, prípadne súčet distribučných položiek
+    # Distribúcia celkom: hľadáme "Spolu bez DPH" pod sekciou Distribúcia
     distribucia_eur = 0.0
-    
-    # Pokus 1: Hľadať sumu pod hlavičkou Služba: Distribúcia
-    distrib_section_match = re.search(r'Služba:\s*Distribúcia.*?(?:Spolu bez DPH\s*([\d\s,]+)\s*€)', text, re.IGNORECASE | re.DOTALL)
-    if distrib_section_match:
-        try:
-            distribucia_eur = float(distrib_section_match.group(1).replace(" ", "").replace(",", "."))
-        except:
-            pass
+    distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
+    if distrib_section:
+        sec_text = distrib_section.group(1)
+        nums = re.findall(r'([\d\s]+,\d{2})\s*€', sec_text)
+        if nums:
+            try:
+                distribucia_eur = float(nums[-1].replace(" ", "").replace(",", "."))
+            except:
+                pass
 
-    # Pokus 2: Ak sa nenašlo, vypočítame to ako rozdiferencovanie celkovej sumy a silovej zložky
-    if distribucia_eur == 0.0 and spolu_bez_dph > 0:
-        distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
+    if distrib_section is None or distribucia_eur == 0.0:
+        # Fallback: ak nenašlo sekciu distribúcie presne, dopočítame zvyšok
+        if spolu_bez_dph > 0 and silova_eur > 0:
+            distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
 
     # --- POKUTY A SANKČNÉ POLOŽKY ---
-    mrk_prekrocenie = extract_line_amount('Tarifa za prekročenie MRK')
+    mrk_prekrocenie = extract_table_amount('Tarifa za prekročenie MRK')
     if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = extract_line_amount('Prekročenie rezervovanej kapacity')
+        mrk_prekrocenie = extract_table_amount('Prekročenie rezervovanej kapacity')
     if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = extract_line_amount('Prekročenie maximálnej rezervovanej kapacity')
+        mrk_prekrocenie = extract_table_amount('Prekročenie maximálnej rezervovanej kapacity')
 
-    jalovina = extract_line_amount('Dodávka jalovej elektriny')
+    jalovina = extract_table_amount('Dodávka jalovej elektriny')
     if jalovina == 0.0:
-        jalovina = extract_line_amount('Nevyžiad.dod.kapacitnej zložky jal.en.')
+        jalovina = extract_table_amount('Nevyžiad.dod.kapacitnej zložky jal.en.')
     
-    ucinnik = extract_line_amount('Prirážka za nedodržanie účinníka')
+    ucinnik = extract_table_amount('Prirážka za nedodržanie účinníka')
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
     return {
