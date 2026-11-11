@@ -61,9 +61,12 @@ def parse_zse_pdf(pdf_path_or_file):
 
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
+    
+    # Pomocná premenná pre chronologické radenie (začiatok obdobia vo formáte YYYY-MM-DD)
+    sort_date = obdobie_match.group(1).split('.')
+    sort_date_str = f"{sort_date[2]}-{sort_date[1]}-{sort_date[0]}" if len(sort_date) == 3 else "0000-00-00"
 
     def get_line_cost(keyword):
-        """Prehľadá riadky textu, nájde kľúčové slovo a vyťahuje poslednú sumu v EUR na danom riadku"""
         for line in text.split('\n'):
             if keyword.lower() in line.lower():
                 amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
@@ -76,7 +79,6 @@ def parse_zse_pdf(pdf_path_or_file):
         return 0.0
 
     def get_line_kwh(keyword):
-        """Vyťahuje spotrebu v kWh pre daný riadok"""
         for line in text.split('\n'):
             if keyword.lower() in line.lower():
                 m = re.search(r'([\d\s,]+)\s*kWh', line, re.IGNORECASE)
@@ -88,15 +90,12 @@ def parse_zse_pdf(pdf_path_or_file):
                         pass
         return 0.0
 
-    # Spotreba v kWh
     silova_kwh = get_line_kwh('1T za elektrinu')
     if silova_kwh == 0.0:
         silova_kwh = get_line_kwh('ČE 1T')
 
-    # Silová zložka v EUR (presne z riadku 1T za elektrinu)
     silova_eur = get_line_cost('1T za elektrinu')
 
-    # Celková suma bez DPH pre celú faktúru
     spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
     spolu_bez_dph = 0.0
     if spolu_match:
@@ -105,7 +104,6 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
-    # Distribúcia celkom (hľadáme riadok "Spolu bez DPH" pod sekciou Distribúcia)
     distribucia_eur = 0.0
     distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
     if distrib_section:
@@ -120,7 +118,6 @@ def parse_zse_pdf(pdf_path_or_file):
     if distribucia_eur == 0.0 and spolu_bez_dph > 0 and silova_eur > 0:
         distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
 
-    # --- POKUTY A SANKČNÉ POLOŽKY ---
     mrk_prekrocenie = get_line_cost('Tarifa za prekročenie MRK')
     if mrk_prekrocenie == 0.0:
         mrk_prekrocenie = get_line_cost('Prekročenie rezervovanej kapacity')
@@ -140,6 +137,7 @@ def parse_zse_pdf(pdf_path_or_file):
         "Lokalita": om_info["lokalita"],
         "Číslo faktúry (VS)": vs_num,
         "Fakturačné obdobie": obdobie,
+        "_sort_date": sort_date_str,
         "Spotreba (kWh)": silova_kwh,
         "Silová zložka (€)": silova_eur,
         "Distribúcia celkom (€)": distribucia_eur,
@@ -353,10 +351,10 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S GRAFOVÝM SÚMAROM A SANKCIAMI
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR (S DEDUPLIKÁCIOU A CHRONOLOGICKÝM RADENÍM)
 with tab4:
     st.subheader("📄 Analýza komodity, distribúcie a sankčných poplatkov zo ZSE faktúr")
-    st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}`.")
+    st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}` (duplicity sú automaticky filtrované).")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
     if uploaded_files:
@@ -380,6 +378,12 @@ with tab4:
         if parsed_results:
             df_invoices = pd.DataFrame(parsed_results)
 
+            # --- DEDUPLIKÁCIA: ODSTRÁNENIE ROVNAKÝCH FAKTÚR (PODĽA EIC A ČÍSLA FAKTÚRY) ---
+            df_invoices = df_invoices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
+
+            # --- CHRONOLOGICKÉ RADENIE PODĽA FAKTURAČNÉHO OBDOBIA ---
+            df_invoices = df_invoices.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
+
             st.divider()
             
             # --- FILTER NA KONKRÉTNE ODBERNÉ MIESTO ---
@@ -392,7 +396,7 @@ with tab4:
             else:
                 df_filtered_inv = df_invoices
 
-            st.success(f"Zobrazených faktúr: {len(df_filtered_inv)}")
+            st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
 
             # ==========================================
             # SÚHRNNÉ GRAFY NA ZAČIATKU ZÁLOŽKY
@@ -402,7 +406,6 @@ with tab4:
             col_g1, col_g2 = st.columns(2)
             
             with col_g1:
-                # 1. Graf: Silová zložka vs Distribúcia
                 df_melt_cost = df_filtered_inv.melt(
                     id_vars=['Odberné miesto', 'Fakturačné obdobie'],
                     value_vars=['Silová zložka (€)', 'Distribúcia celkom (€)'],
@@ -416,7 +419,6 @@ with tab4:
                 st.plotly_chart(fig_g1, use_container_width=True)
 
             with col_g2:
-                # 2. Graf: Pokuty a sankcie (MRK, Jalovina, Účinník)
                 df_melt_penalties = df_filtered_inv.melt(
                     id_vars=['Odberné miesto', 'Fakturačné obdobie'],
                     value_vars=['Prekročenie MRK (€)', 'Jalová elektrina (€)', 'Prirážka za účinník (€)'],
@@ -431,7 +433,8 @@ with tab4:
 
             st.divider()
             
-            display_cols = [c for c in df_filtered_inv.columns if c != "Raw_Text"]
+            # Skrytie pomocného stĺpca _sort_date z tabuľky
+            display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date"]]
             st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
 
             st.divider()
@@ -445,7 +448,6 @@ with tab4:
                 c_f3.metric("Prekročenie MRK", f"{row['Prekročenie MRK (€)']:,.2f} €", delta_color="inverse" if row['Prekročenie MRK (€)'] > 0 else "normal")
                 c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
 
-                # Koláčový graf pre komoditu, distribúciu a pokuty
                 cost_breakdown = {
                     "Silová zložka (Komodita)": row['Silová zložka (€)'],
                     "Distribúcia celkom": row['Distribúcia celkom (€)'],
