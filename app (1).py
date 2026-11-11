@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- ROBUSTNÝ A PRESNÝ PARSER ZSE FAKTÚR ---
+# --- PRESNÝ A BEZPEČNÝ PARSER ZSE FAKTÚR ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -62,18 +62,25 @@ def parse_zse_pdf(pdf_path_or_file):
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
     
-    # Pomocná premenná pre chronologické radenie (začiatok obdobia vo formáte YYYY-MM-DD)
-    sort_date = obdobie_match.group(1).split('.')
+    sort_date = obdobie_match.group(1).split('.') if obdobie_match else []
     sort_date_str = f"{sort_date[2]}-{sort_date[1]}-{sort_date[0]}" if len(sort_date) == 3 else "0000-00-00"
 
-    def get_line_cost(keyword):
+    def get_line_cost(keywords):
+        """Vyťahuje sumu v EUR pre zoznam možných kľúčových slov s ochranou proti chybám"""
+        if isinstance(keywords, str):
+            keywords = [keywords]
+        
         for line in text.split('\n'):
-            if keyword.lower() in line.lower():
+            if any(kw.lower() in line.lower() for kw in keywords):
+                if any(x in line.lower() for x in ['technické údaje', 'stav', 'rozdiel', 'mes.nam']):
+                    continue
                 amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
-                        return float(val_str)
+                        val = float(val_str)
+                        if 0 <= val < 100000:
+                            return val
                     except:
                         pass
         return 0.0
@@ -81,11 +88,15 @@ def parse_zse_pdf(pdf_path_or_file):
     def get_line_kwh(keyword):
         for line in text.split('\n'):
             if keyword.lower() in line.lower():
+                if 'technické údaje' in line.lower():
+                    continue
                 m = re.search(r'([\d\s,]+)\s*kWh', line, re.IGNORECASE)
                 if m:
                     val_str = m.group(1).split()[0].replace(" ", "").replace(",", ".")
                     try:
-                        return float(val_str)
+                        val = float(val_str)
+                        if val < 10000000:
+                            return val
                     except:
                         pass
         return 0.0
@@ -94,7 +105,8 @@ def parse_zse_pdf(pdf_path_or_file):
     if silova_kwh == 0.0:
         silova_kwh = get_line_kwh('ČE 1T')
 
-    silova_eur = get_line_cost('1T za elektrinu')
+    # Spoľahlivé vyhľadanie silovej zložky (komodity)
+    silova_eur = get_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special'])
 
     spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
     spolu_bez_dph = 0.0
@@ -104,6 +116,7 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
+    # Distribúcia celkom
     distribucia_eur = 0.0
     distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
     if distrib_section:
@@ -111,23 +124,22 @@ def parse_zse_pdf(pdf_path_or_file):
         nums = re.findall(r'([\d\s]+,\d{2})\s*€', sec_text)
         if nums:
             try:
-                distribucia_eur = float(nums[-1].replace(" ", "").replace(",", "."))
+                val = float(nums[-1].replace(" ", "").replace(",", "."))
+                if val < 100000:
+                    distribucia_eur = val
             except:
                 pass
 
     if distribucia_eur == 0.0 and spolu_bez_dph > 0 and silova_eur > 0:
         distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
 
-    mrk_prekrocenie = get_line_cost('Tarifa za prekročenie MRK')
-    if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = get_line_cost('Prekročenie rezervovanej kapacity')
-    if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = get_line_cost('Prekročenie maximálnej rezervovanej kapacity')
+    # Ak by silová zložka ostala 0, ale máme celkovú sumu a distribúciu, dopočítame ju
+    if silova_eur == 0.0 and spolu_bez_dph > 0 and distribucia_eur > 0:
+        silova_eur = max(0.0, spolu_bez_dph - distribucia_eur)
 
-    jalovina = get_line_cost('Dodávka jalovej elektriny')
-    if jalovina == 0.0:
-        jalovina = get_line_cost('Nevyžiad.dod.kapacitnej zložky jal.en.')
-    
+    # --- POKUTY A SANKČNÉ POLOŽKY ---
+    mrk_prekrocenie = get_line_cost(['Tarifa za prekročenie MRK', 'Prekročenie rezervovanej kapacity', 'Prekročenie maximálnej rezervovanej kapacity'])
+    jalovina = get_line_cost(['Dodávka jalovej elektriny', 'Nevyžiad.dod.kapacitnej zložky jal.en.'])
     ucinnik = get_line_cost('Prirážka za nedodržanie účinníka')
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
@@ -351,10 +363,10 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR (S DEDUPLIKÁCIOU A CHRONOLOGICKÝM RADENÍM)
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR (S DEDUPLIKÁCIOU A RADENÍM OD JANUÁRA DO DECEMBRA)
 with tab4:
     st.subheader("📄 Analýza komodity, distribúcie a sankčných poplatkov zo ZSE faktúr")
-    st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}` (duplicity sú automaticky filtrované).")
+    st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}` (duplicity sú automaticky odfiltrované).")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
     if uploaded_files:
@@ -378,11 +390,8 @@ with tab4:
         if parsed_results:
             df_invoices = pd.DataFrame(parsed_results)
 
-            # --- DEDUPLIKÁCIA: ODSTRÁNENIE ROVNAKÝCH FAKTÚR (PODĽA EIC A ČÍSLA FAKTÚRY) ---
+            # --- DEDUPLIKÁCIA: ODSTRÁNENIE ROVNAKÝCH FAKTÚR ---
             df_invoices = df_invoices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
-
-            # --- CHRONOLOGICKÉ RADENIE PODĽA FAKTURAČNÉHO OBDOBIA ---
-            df_invoices = df_invoices.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
 
             st.divider()
             
@@ -392,16 +401,19 @@ with tab4:
             selected_single_om = st.selectbox("Vyber konkrétne odberné miesto pre detailnú analýzu:", options=unique_oms)
 
             if selected_single_om != "Všetky odberné miesta":
-                df_filtered_inv = df_invoices[df_invoices['Odberné miesto'] == selected_single_om]
+                df_filtered_inv = df_invoices[df_invoices['Odberné miesto'] == selected_single_om].copy()
             else:
-                df_filtered_inv = df_invoices
+                df_filtered_inv = df_invoices.copy()
+
+            # --- CHRONOLOGICKÉ RADENIE OD JANUÁRA DO DECEMBRA ---
+            df_filtered_inv = df_filtered_inv.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
 
             st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
 
             # ==========================================
             # SÚHRNNÉ GRAFY NA ZAČIATKU ZÁLOŽKY
             # ==========================================
-            st.markdown("### 📈 Súhrnný prehľad načítaných faktúr")
+            st.markdown("### 📈 Súhrnný prehľad načítaných faktúr (Zoradené od januára do decembra)")
             
             col_g1, col_g2 = st.columns(2)
             
@@ -433,7 +445,6 @@ with tab4:
 
             st.divider()
             
-            # Skrytie pomocného stĺpca _sort_date z tabuľky
             display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date"]]
             st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
 
