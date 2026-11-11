@@ -48,6 +48,9 @@ EIC_MAP = {
 # --- OPTIMALIZOVANÝ A CACHOVANÝ PARSER ZSE FAKTÚR ---
 @st.cache_data
 def parse_zse_pdf(pdf_path):
+    if not os.path.exists(pdf_path):
+        return None
+        
     with pdfplumber.open(pdf_path) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
 
@@ -441,101 +444,116 @@ elif selected_tab == TAB_NAMES[2]:
     st.subheader(f"💶 Reálna spotová cena za 1 kWh z PDF faktúr ({selected_lokalita})")
     st.markdown("Porovnanie čistej **silovej zložky (spotová cena komodity)** vs. **celkovej reálnej ceny vrátane distribúcie, poplatkov a pokút** vypočítanej priamo z nahratých faktúr.")
 
-    all_pdf_files = [os.path.join(INVOICE_DIR, f) for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
+    all_pdf_files = [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
     
     if all_pdf_files:
-        parsed_results = [parse_zse_pdf(os.path.join(INVOICE_DIR, f)) for f in all_pdf_files]
-        df_inv_prices = pd.DataFrame(parsed_results)
-        df_inv_prices = df_inv_prices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
+        parsed_results = []
+        for f in all_pdf_files:
+            f_path = os.path.join(INVOICE_DIR, f)
+            if os.path.exists(f_path):
+                res = parse_zse_pdf(f_path)
+                if res:
+                    parsed_results.append(res)
+                    
+        if parsed_results:
+            df_inv_prices = pd.DataFrame(parsed_results)
+            df_inv_prices = df_inv_prices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
 
-        if selected_lokalita != "Všetky lokality":
-            df_inv_prices = df_inv_prices[df_inv_prices['Lokalita'] == selected_lokalita]
+            if selected_lokalita != "Všetky lokality":
+                df_inv_prices = df_inv_prices[df_inv_prices['Lokalita'] == selected_lokalita]
 
-        if not df_inv_prices.empty:
-            # ==========================================
-            # KOLÁČOVÉ GRAFY NA ÚVOD: AKO SI VEDIA ODBERNÉ MIESTA
-            # ==========================================
-            st.markdown("### 📊 Úvodný prehľad odberných miest (zo ZSE faktúr)")
-            om_summary_agg = df_inv_prices.groupby('Odberné miesto').agg({
-                'Spotreba (kWh)': 'sum',
-                'Spolu bez DPH (€)': 'sum'
-            }).reset_index()
+            if not df_inv_prices.empty:
+                # ==========================================
+                # KOLÁČOVÉ GRAFY NA ÚVOD: AKO SI VEDIA ODBERNÉ MIESTA
+                # ==========================================
+                st.markdown("### 📊 Úvodný prehľad odberných miest (zo ZSE faktúr)")
+                om_summary_agg = df_inv_prices.groupby('Odberné miesto').agg({
+                    'Spotreba (kWh)': 'sum',
+                    'Spolu bez DPH (€)': 'sum'
+                }).reset_index()
 
-            col_u1, col_u2 = st.columns(2)
-            with col_u1:
-                fig_om_kwh = px.pie(
-                    om_summary_agg, names='Odberné miesto', values='Spotreba (kWh)', hole=0.4,
-                    title="Podiel odberných miest na celkovej spotrebe (kWh)",
+                col_u1, col_u2 = st.columns(2)
+                with col_u1:
+                    fig_om_kwh = px.pie(
+                        om_summary_agg, names='Odberné miesto', values='Spotreba (kWh)', hole=0.4,
+                        title="Podiel odberných miest na celkovej spotrebe (kWh)",
+                        template="plotly_dark"
+                    )
+                    fig_om_kwh.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
+                    st.plotly_chart(fig_om_kwh, use_container_width=True)
+                    tot_kwh_sum = om_summary_agg['Spotreba (kWh)'].sum()
+                    st.markdown(f"**Celková spotreba: {tot_kwh_sum:,.0f} kWh**")
+
+                with col_u2:
+                    fig_om_eur = px.pie(
+                        om_summary_agg, names='Odberné miesto', values='Spolu bez DPH (€)', hole=0.4,
+                        title="Podiel odberných miest na celkových nákladoch (€)",
+                        template="plotly_dark"
+                    )
+                    fig_om_eur.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
+                    st.plotly_chart(fig_om_eur, use_container_width=True)
+                    tot_eur_sum = om_summary_agg['Spolu bez DPH (€)'].sum()
+                    st.markdown(f"**Celkové náklady bez DPH: {tot_eur_sum:,.2f} €**")
+
+                st.divider()
+
+                # Výpočet jednotkových cien za 1 kWh pre každú faktúru
+                df_inv_prices['Cena sila (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Silová zložka (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
+                df_inv_prices['Cena celkom s distribúciou (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Spolu bez DPH (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
+
+                # Graf vývoja jednotkových cien
+                df_melt_price = df_inv_prices.melt(
+                    id_vars=['Odberné miesto', 'Fakturačné obdobie'],
+                    value_vars=['Cena sila (€/kWh)', 'Cena celkom s distribúciou (€/kWh)'],
+                    var_name='Typ ceny', value_name='Cena (€/kWh)'
+                )
+
+                fig_spot_trend = px.line(
+                    df_melt_price, x='Fakturačné obdobie', y='Cena (€/kWh)', color='Odberné miesto', line_dash='Typ ceny',
+                    markers=True, title="Mesačný vývoj spotovej ceny komodity vs. reálnej ceny s distribúciou (€/kWh)",
                     template="plotly_dark"
                 )
-                fig_om_kwh.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
-                st.plotly_chart(fig_om_kwh, use_container_width=True)
-                tot_kwh_sum = om_summary_agg['Spotreba (kWh)'].sum()
-                st.markdown(f"**Celková spotreba: {tot_kwh_sum:,.0f} kWh**")
+                st.plotly_chart(fig_spot_trend, use_container_width=True)
 
-            with col_u2:
-                fig_om_eur = px.pie(
-                    om_summary_agg, names='Odberné miesto', values='Spolu bez DPH (€)', hole=0.4,
-                    title="Podiel odberných miest na celkových nákladoch (€)",
-                    template="plotly_dark"
-                )
-                fig_om_eur.update_traces(textinfo='percent+label', textfont=dict(size=12, color='white'))
-                st.plotly_chart(fig_om_eur, use_container_width=True)
-                tot_eur_sum = om_summary_agg['Spolu bez DPH (€)'].sum()
-                st.markdown(f"**Celkové náklady bez DPH: {tot_eur_sum:,.2f} €**")
-
-            st.divider()
-
-            # Výpočet jednotkových cien za 1 kWh pre každú faktúru
-            df_inv_prices['Cena sila (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Silová zložka (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
-            df_inv_prices['Cena celkom s distribúciou (€/kWh)'] = df_inv_prices.apply(lambda r: (r['Spolu bez DPH (€)'] / r['Spotreba (kWh)']) if r['Spotreba (kWh)'] > 0 else 0, axis=1)
-
-            # Graf vývoja jednotkových cien
-            df_melt_price = df_inv_prices.melt(
-                id_vars=['Odberné miesto', 'Fakturačné obdobie'],
-                value_vars=['Cena sila (€/kWh)', 'Cena celkom s distribúciou (€/kWh)'],
-                var_name='Typ ceny', value_name='Cena (€/kWh)'
-            )
-
-            fig_spot_trend = px.line(
-                df_melt_price, x='Fakturačné obdobie', y='Cena (€/kWh)', color='Odberné miesto', line_dash='Typ ceny',
-                markers=True, title="Mesačný vývoj spotovej ceny komodity vs. reálnej ceny s distribúciou (€/kWh)",
-                template="plotly_dark"
-            )
-            st.plotly_chart(fig_spot_trend, use_container_width=True)
-
-            # Súhrnná tabuľka priemerov podľa odberných miest
-            st.markdown("### 📋 Súhrnné reálne ceny za 1 kWh podľa odberných miest (zo ZSE faktúr)")
-            summary_spot = []
-            for om in df_inv_prices['Odberné miesto'].unique():
-                sub = df_inv_prices[df_inv_prices['Odberné miesto'] == om]
-                tot_kwh = sub['Spotreba (kWh)'].sum()
-                tot_silova = sub['Silová zložka (€)'].sum()
-                tot_spolu = sub['Spolu bez DPH (€)'].sum()
+                # Súhrnná tabuľka priemerov podľa odberných miest
+                st.markdown("### 📋 Súhrnné reálne ceny za 1 kWh podľa odberných miest (zo ZSE faktúr)")
+                summary_spot = []
+                for om in df_inv_prices['Odberné miesto'].unique():
+                    sub = df_inv_prices[df_inv_prices['Odberné miesto'] == om]
+                    tot_kwh = sub['Spotreba (kWh)'].sum()
+                    tot_silova = sub['Silová zložka (€)'].sum()
+                    tot_spolu = sub['Spolu bez DPH (€)'].sum()
+                    
+                    avg_sila = (tot_silova / tot_kwh) if tot_kwh > 0 else 0
+                    avg_celkom = (tot_spolu / tot_kwh) if tot_kwh > 0 else 0
+                    
+                    summary_spot.append({
+                        'Odberné miesto': om,
+                        'Celková spotreba (kWh)': tot_kwh,
+                        'Priemerná cena sila (spot) (€/kWh)': round(avg_sila, 4),
+                        'Reálna celková cena s distribúciou (€/kWh)': round(avg_celkom, 4)
+                    })
                 
-                avg_sila = (tot_silova / tot_kwh) if tot_kwh > 0 else 0
-                avg_celkom = (tot_spolu / tot_kwh) if tot_kwh > 0 else 0
-                
-                summary_spot.append({
-                    'Odberné miesto': om,
-                    'Celková spotreba (kWh)': tot_kwh,
-                    'Priemerná cena sila (spot) (€/kWh)': round(avg_sila, 4),
-                    'Reálna celková cena s distribúciou (€/kWh)': round(avg_celkom, 4)
-                })
-            
-            st.dataframe(pd.DataFrame(summary_spot), use_container_width=True, hide_index=True)
-        else:
-            st.info("Pre zvolenú lokalitu zatiaľ nie sú k dispozícii žiadne dáta vo faktúrach.")
+                st.dataframe(pd.DataFrame(summary_spot), use_container_width=True, hide_index=True)
+            else:
+                st.info("Pre zvolenú lokalitu zatiaľ nie sú k dispozícii žiadne dáta vo faktúrach.")
     else:
         st.info("V priečinku `faktury_zse/` nie sú nahraté žiadne PDF faktúry. Pre zobrazenie spotových cien nahraj faktúry v štvrtej záložke.")
 
 elif selected_tab == TAB_NAMES[3]:
     st.subheader("📄 Analýza PDF faktúr zo ZSE")
     
-    all_pdf_files = [os.path.join(INVOICE_DIR, f) for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
+    all_pdf_files = [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')]
 
     if all_pdf_files:
-        parsed_results = [parse_zse_pdf(os.path.join(INVOICE_DIR, f)) for f in all_pdf_files]
+        parsed_results = []
+        for f in all_pdf_files:
+            f_path = os.path.join(INVOICE_DIR, f)
+            if os.path.exists(f_path):
+                res = parse_zse_pdf(f_path)
+                if res:
+                    parsed_results.append(res)
+                    
         if parsed_results:
             df_invoices = pd.DataFrame(parsed_results)
             df_invoices = df_invoices.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
