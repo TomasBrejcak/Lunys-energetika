@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PARSER Zameraný na Komoditu, RK, MRK a Jalovinu / Pokuty ---
+# --- PRESNÝ PARSER ZAMERANÝ NA KOMODITU, RK, MRK A JALOVINU ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -89,23 +89,27 @@ def parse_zse_pdf(pdf_path_or_file):
         r'Dodávka elektriny\s+([\d\s,]+)'
     ])
 
-    # Sankčné položky a špecifické poplatky (RK, MRK, Jalovina)
+    # Rezervovaná kapacita (RK)
     rk_poplatok = safe_extract([
+        r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€',
         r'Rezervovaná kapacita.*?([\d\s,]+)\s*€',
-        r'Pevná zložka tarify za distribúciu.*?([\d\s,]+)\s*€'
+        r'Pevná zložka.*?([\d\s,]+)\s*€'
     ])
     
+    # Prekročenie MRK (všetky varianty z faktúr)
     mrk_prekrocenie = safe_extract([
+        r'Tarifa za prekročenie MRK.*?([\d\s,]+)\s*€',
         r'Prekročenie rezervovanej kapacity.*?([\d\s,]+)\s*€',
-        r'MRK.*?([\d\s,]+)\s*€',
+        r'Prekročenie maximálnej rezervovanej kapacity.*?([\d\s,]+)\s*€',
         r'Prekročenie mesačnej rezervovanej kapacity.*?([\d\s,]+)\s*€'
     ])
     
+    # Jalovina a účinník (všetky varianty z faktúr)
     jalovina = safe_extract([
-        r'Nevyžiad\.dod\.kapacitnej zložky jal\.en.*?([\d\s,]+)\s*€',
+        r'Nevyžiad\.dod\.kapacitnej zložky jal\.en\..*?([\d\s,]+)\s*€',
+        r'Prirážka za nedodržanie účinníka.*?([\d\s,]+)\s*€',
         r'Dodávka jalovej elektriny.*?([\d\s,]+)\s*€',
-        r'jal\.en\..*?([\d\s,]+)\s*€',
-        r'Nedodržanie účinníka.*?([\d\s,]+)\s*€'
+        r'jal\.en\..*?([\d\s,]+)\s*€'
     ])
 
     spolu_bez_dph = safe_extract([
@@ -315,7 +319,7 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S FILtrom A SANKCIAMI
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR S FILTROM A SANKCIAMI
 with tab4:
     st.subheader("📄 Analýza komodity a sankčných poplatkov (RK, MRK, Jalovina) zo ZSE faktúr")
     st.markdown(f"Faktúry sú načítavané priamo z trvalého priečinka `/{INVOICE_DIR}`. Nové PDF môžeš pridať aj potiahnutím nižšie:")
