@@ -45,7 +45,7 @@ EIC_MAP = {
     "24ZVS0000787041D": {"nazov": "Trafostanica HARAMIA", "lokalita": "Poprad"}
 }
 
-# --- PRESNÝ PARSER ZSE FAKTÚR ---
+# --- PRESNÝ A BEZPEČNÝ PARSER ZSE FAKTÚR ---
 def parse_zse_pdf(pdf_path_or_file):
     with pdfplumber.open(pdf_path_or_file) as pdf:
         text = "\n".join([page.extract_text() or "" for page in pdf.pages])
@@ -62,8 +62,9 @@ def parse_zse_pdf(pdf_path_or_file):
     obdobie_match = re.search(r'Fakturačné obdobie\s*(\d{2}\.\d{2}\.\d{4})\s*-\s*(\d{2}\.\d{2}\.\d{4})', text)
     obdobie = f"{obdobie_match.group(1)} - {obdobie_match.group(2)}" if obdobie_match else "Neuvedené"
 
-    def extract_table_amount(line_start_text):
-        """Vyťahuje koncovú sumu v eurách z riadku začínajúceho daným textom"""
+    def extract_euro_amount(line_start_text):
+        """Bezpečne vyťahuje presnú sumu v EUR na konci riadku daného textu"""
+        # Hľadá text položky a na konci toho istého riadku zoberie sumu vo formáte X XXX,XX
         pattern = re.escape(line_start_text) + r'.*?([\d\s]+,\d{2})\s*(?:€)?\s*$'
         m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         if m:
@@ -74,7 +75,7 @@ def parse_zse_pdf(pdf_path_or_file):
                 pass
         return 0.0
 
-    # Spotreba v kWh (hľadáme množstvo pri 1T)
+    # Spotreba v kWh (hľadáme množstvo pred kWh v riadku 1T)
     kwh_match = re.search(r'1T za elektrinu\s+([\d\s,]+)\s*kWh', text, re.IGNORECASE)
     if not kwh_match:
         kwh_match = re.search(r'ČE 1T vrát\.str reg\.mer-účt\..*?([\d\s,]+)\s*kWh', text, re.IGNORECASE)
@@ -82,12 +83,12 @@ def parse_zse_pdf(pdf_path_or_file):
     silova_kwh = 0.0
     if kwh_match:
         try:
-            silova_kwh = float(kwh_match.group(1).replace(" ", "").replace(",", "."))
+            silova_kwh = float(kwh_match.group(1).split()[0].replace(" ", "").replace(",", "."))
         except:
             pass
 
     # Silová zložka v EUR (suma z riadku 1T za elektrinu)
-    silova_eur = extract_table_amount('1T za elektrinu')
+    silova_eur = extract_euro_amount('1T za elektrinu')
 
     # Celková suma bez DPH pre celú faktúru
     spolu_match = re.search(r'Suma spolu\s*([\d\s,]+)\s*€', text, re.IGNORECASE)
@@ -98,7 +99,7 @@ def parse_zse_pdf(pdf_path_or_file):
         except:
             pass
 
-    # Distribúcia celkom: hľadáme "Spolu bez DPH" pod sekciou Distribúcia
+    # Distribúcia celkom: hľadáme súčet pod sekciou Distribúcia ("Spolu bez DPH")
     distribucia_eur = 0.0
     distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
     if distrib_section:
@@ -110,23 +111,21 @@ def parse_zse_pdf(pdf_path_or_file):
             except:
                 pass
 
-    if distrib_section is None or distribucia_eur == 0.0:
-        # Fallback: ak nenašlo sekciu distribúcie presne, dopočítame zvyšok
-        if spolu_bez_dph > 0 and silova_eur > 0:
-            distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
+    if distribucia_eur == 0.0 and spolu_bez_dph > 0 and silova_eur > 0:
+        distribucia_eur = max(0.0, spolu_bez_dph - silova_eur)
 
     # --- POKUTY A SANKČNÉ POLOŽKY ---
-    mrk_prekrocenie = extract_table_amount('Tarifa za prekročenie MRK')
+    mrk_prekrocenie = extract_euro_amount('Tarifa za prekročenie MRK')
     if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = extract_table_amount('Prekročenie rezervovanej kapacity')
+        mrk_prekrocenie = extract_euro_amount('Prekročenie rezervovanej kapacity')
     if mrk_prekrocenie == 0.0:
-        mrk_prekrocenie = extract_table_amount('Prekročenie maximálnej rezervovanej kapacity')
+        mrk_prekrocenie = extract_euro_amount('Prekročenie maximálnej rezervovanej kapacity')
 
-    jalovina = extract_table_amount('Dodávka jalovej elektriny')
+    jalovina = extract_euro_amount('Dodávka jalovej elektriny')
     if jalovina == 0.0:
-        jalovina = extract_table_amount('Nevyžiad.dod.kapacitnej zložky jal.en.')
+        jalovina = extract_euro_amount('Nevyžiad.dod.kapacitnej zložky jal.en.')
     
-    ucinnik = extract_table_amount('Prirážka za nedodržanie účinníka')
+    ucinnik = extract_euro_amount('Prirážka za nedodržanie účinníka')
     celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
 
     return {
