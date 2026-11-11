@@ -71,15 +71,35 @@ def parse_zse_pdf(pdf_path_or_file):
     month_map = {"01": "Január", "02": "Február", "03": "Marec", "04": "Apríl", "05": "Máj", "06": "Jún", "07": "Júl", "08": "August", "09": "September", "10": "Október", "11": "November", "12": "December"}
     invoice_month = month_map.get(sort_date[1], "Neuvedené") if len(sort_date) == 3 else "Neuvedené"
 
-    def get_exact_line_cost(keywords):
+    def get_cost_near_keyword(keywords):
         if isinstance(keywords, str):
             keywords = [keywords]
         
+        for kw in keywords:
+            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
+            for pos in matches:
+                # Okno textu pre presné vyčítanie sumy hneď za názvom položky v tabuľke
+                window = text[pos:pos+150]
+                if any(x in window.lower() for x in ['technické údaje', 'stav']):
+                    continue
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
+                if amounts:
+                    val_str = amounts[-1].replace(" ", "").replace(",", ".")
+                    try:
+                        val = float(val_str)
+                        if 0 <= val < 1000000:
+                            return val
+                    except:
+                        pass
+        return 0.0
+
+    def get_exact_line_cost(keywords):
+        if isinstance(keywords, str):
+            keywords = [keywords]
         for line in text.split('\n'):
             if any(kw.lower() in line.lower() for kw in keywords):
                 if any(x in line.lower() for x in ['technické údaje', 'stav']):
                     continue
-                # Hľadáme sumu striktne na danom riadku (posledné číslo v EUR na riadku)
                 amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
@@ -125,15 +145,15 @@ def parse_zse_pdf(pdf_path_or_file):
             except:
                 pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY (Striktne iba z riadku daného poplatku) ---
-    mrk_prekrocenie = get_exact_line_cost([
+    # --- POKUTY A SANKČNÉ POLOŽKY (Presne podla reálnej faktúry ZSE) ---
+    mrk_prekrocenie = get_cost_near_keyword([
         'Prekročenie maximálnej rezervovanej kapacity', 
         'Prekročenie rezervovanej kapacity', 
         'Tarifa za prekročenie MRK',
         'Prekročenie MRK'
     ])
     
-    jalovina = get_exact_line_cost([
+    jalovina = get_cost_near_keyword([
         'Dodávka jalovej elektriny', 
         'Nevyžiad.dod.kapacitnej zložky jal.en.', 
         'Jalová elektrina',
@@ -141,7 +161,7 @@ def parse_zse_pdf(pdf_path_or_file):
         'Dodávka jalovej kapacitnej'
     ])
     
-    ucinnik = get_exact_line_cost([
+    ucinnik = get_cost_near_keyword([
         'Prirážka za nedodržanie účinníka', 
         'Nedodržanie účinníka',
         'Prirážka za účinník',
