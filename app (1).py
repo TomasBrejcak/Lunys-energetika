@@ -504,6 +504,14 @@ if selected_tab == TAB_NAMES[0]:
         with col_right:
             fig_elec_eur = px.bar(filtered_elec, x='Mesiac', y='Náklady (€)', color='Odberné miesto', barmode='group', title="Mesačné náklady bez DPH (€)", template="plotly_dark")
             st.plotly_chart(fig_elec_eur, use_container_width=True)
+            
+        # Doplnený súhrnný prehľad pod grafmi
+        st.divider()
+        col_sub1, col_sub2 = st.columns(2)
+        col_sub1.metric("Celková spotreba (vybrané miesta)", f"{filtered_elec['Spotreba (kWh)'].sum():,.0f} kWh")
+        col_sub2.metric("Celkové náklady (vybrané miesta)", f"{filtered_elec['Náklady (€)'].sum():,.2f} €")
+        st.divider()
+
         st.dataframe(filtered_elec[['Mesiac', 'Odberné miesto', 'Lokalita', 'Spotreba (kWh)', 'Náklady (€)', 'Cena (€/kWh)', 'Zdroj']], use_container_width=True, hide_index=True)
     else:
         st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
