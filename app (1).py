@@ -71,18 +71,14 @@ def parse_zse_pdf(pdf_path_or_file):
     month_map = {"01": "Január", "02": "Február", "03": "Marec", "04": "Apríl", "05": "Máj", "06": "Jún", "07": "Júl", "08": "August", "09": "September", "10": "Október", "11": "November", "12": "December"}
     invoice_month = month_map.get(sort_date[1], "Neuvedené") if len(sort_date) == 3 else "Neuvedené"
 
-    def get_cost_near_keyword(keywords):
+    def get_exact_line_cost(keywords):
         if isinstance(keywords, str):
             keywords = [keywords]
-        
-        for kw in keywords:
-            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
-            for pos in matches:
-                # Okno textu pre presné vyčítanie sumy hneď za názvom položky v tabuľke
-                window = text[pos:pos+150]
-                if any(x in window.lower() for x in ['technické údaje', 'stav']):
+        for line in text.split('\n'):
+            if any(kw.lower() in line.lower() for kw in keywords):
+                if any(x in line.lower() for x in ['technické údaje', 'stav']):
                     continue
-                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
@@ -93,14 +89,17 @@ def parse_zse_pdf(pdf_path_or_file):
                         pass
         return 0.0
 
-    def get_exact_line_cost(keywords):
+    def get_cost_near_keyword(keywords):
         if isinstance(keywords, str):
             keywords = [keywords]
-        for line in text.split('\n'):
-            if any(kw.lower() in line.lower() for kw in keywords):
-                if any(x in line.lower() for x in ['technické údaje', 'stav']):
+        
+        for kw in keywords:
+            matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
+            for pos in matches:
+                window = text[pos:pos+150]
+                if any(x in window.lower() for x in ['technické údaje', 'stav']):
                     continue
-                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', line)
+                amounts = re.findall(r'(\d{1,3}(?:\s?\d{3})*,\d{2})', window)
                 if amounts:
                     val_str = amounts[-1].replace(" ", "").replace(",", ".")
                     try:
@@ -130,22 +129,25 @@ def parse_zse_pdf(pdf_path_or_file):
         return 0.0
 
     silova_kwh = get_line_kwh(['1T za elektrinu', 'ČE 1T', 'Dodávka elektriny'])
-    silova_eur = get_exact_line_cost(['1T za elektrinu', 'Dodávka elektriny', 'Register-Special', 'ČE 1T'])
+    
+    # Silová zložka zo sumáru
+    silova_eur = get_exact_line_cost(['Dodávka elektriny'])
+    if silova_eur == 0.0:
+        silova_eur = get_exact_line_cost(['1T za elektrinu', 'Register-Special', 'ČE 1T'])
 
-    distribucia_eur = 0.0
-    distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
-    if distrib_section:
-        sec_text = distrib_section.group(1)
-        nums = re.findall(r'([\d\s]+,\d{2})\s*€', sec_text)
-        if nums:
-            try:
-                val = float(nums[-1].replace(" ", "").replace(",", "."))
-                if val < 1000000:
-                    distribucia_eur = val
-            except:
-                pass
+    # Distribúcia celkom primárne zo sumáru (vyhne sa zámene s položkami v tabuľke)
+    distribucia_eur = get_exact_line_cost(['Distribúcia elektriny'])
+    if distribucia_eur == 0.0:
+        distrib_section = re.search(r'Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)', text, re.IGNORECASE | re.DOTALL)
+        if distrib_section:
+            match_sum = re.search(r'Spolu bez DPH\s*([\d\s]+,\d{2})\s*€', distrib_section.group(1), re.IGNORECASE)
+            if match_sum:
+                try:
+                    distribucia_eur = float(match_sum.group(1).replace(" ", "").replace(",", "."))
+                except:
+                    pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY (Presne podla reálnej faktúry ZSE) ---
+    # --- POKUTY A SANKČNÉ POLOŽKY ---
     mrk_prekrocenie = get_cost_near_keyword([
         'Prekročenie maximálnej rezervovanej kapacity', 
         'Prekročenie rezervovanej kapacity', 
