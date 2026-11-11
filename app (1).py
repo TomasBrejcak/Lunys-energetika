@@ -92,9 +92,7 @@ def parse_zse_pdf(pdf_path_or_file):
     def get_penalty_cost(keywords):
         if isinstance(keywords, str):
             keywords = [keywords]
-        
         for kw in keywords:
-            # Hľadáme riadok obsahujúci kľúčové slovo
             for line in text.split('\n'):
                 if kw.lower() in line.lower():
                     if any(x in line.lower() for x in ['technické údaje', 'stav']):
@@ -108,8 +106,6 @@ def parse_zse_pdf(pdf_path_or_file):
                                 return val
                         except:
                             pass
-            
-            # Ak sa nenašlo na jednom riadku, skúsime kontextové okno (ak je text zalomený)
             matches = [m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)]
             for pos in matches:
                 window = text[pos:pos+150]
@@ -145,7 +141,6 @@ def parse_zse_pdf(pdf_path_or_file):
         return 0.0
 
     silova_kwh = get_line_kwh(['1T za elektrinu', 'ČE 1T', 'Dodávka elektriny'])
-    
     silova_eur = get_exact_line_cost(['Dodávka elektriny'])
     if silova_eur == 0.0:
         silova_eur = get_exact_line_cost(['1T za elektrinu', 'Register-Special', 'ČE 1T'])
@@ -170,7 +165,6 @@ def parse_zse_pdf(pdf_path_or_file):
                 except:
                     pass
 
-    # --- POKUTY A SANKČNÉ POLOŽKY (Zoznam pre Bratislavu aj Poprad / Haramiamu) ---
     mrk_prekrocenie = get_penalty_cost([
         'Prekročenie maximálnej rezervovanej kapacity', 
         'Prekročenie rezervovanej kapacity', 
@@ -429,9 +423,9 @@ with tab3:
         records_price.append({'Odberné miesto': om, 'Celková spotreba (kWh)': tot_kwh, 'Celkové náklady (€)': tot_eur, 'Priemerná cena (€/kWh)': avg_p})
     st.dataframe(pd.DataFrame(records_price), use_container_width=True, hide_index=True)
 
-# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR A AUTOMATICKÁ KRÍŽOVÁ KONTROLA
+# ZÁLOŽKA 4: ANALÝZA PDF FAKTÚR (S FILTREM NA VRCHU, KOLÁČOVÝMI GRAFMI A AUDITOM NASPODKU)
 with tab4:
-    st.subheader("📄 Analýza PDF faktúr a automatický audit vs. Excel")
+    st.subheader("📄 Analýza PDF faktúr zo ZSE")
     st.markdown(f"Faktúry sú načítavané z priečinka `/{INVOICE_DIR}` (duplicity sú automaticky odfiltrované).")
 
     uploaded_files = st.file_uploader("Nahraj nové PDF faktúry:", type=["pdf"], accept_multiple_files=True)
@@ -459,44 +453,8 @@ with tab4:
 
             st.divider()
             
-            # --- AUTOMATICKÁ KRÍŽOVÁ KONTROLA (PDF vs EXCEL) ---
-            st.markdown("### 🔍 Automatická krížová kontrola (PDF vs. Excel)")
-            st.markdown("Porovnanie nákladov bez DPH vyťažených z nahratých PDF faktúr oproti hodnotám zapísaným v Exceli (`Spotreby energií.xlsx`).")
-
-            audit_records = []
-            for _, inv in df_invoices.iterrows():
-                om = inv['Odberné miesto']
-                m = inv['Mesiac']
-                pdf_val = inv['Spolu bez DPH (€)']
-
-                match_row = elec_df[(elec_df['Odberné miesto'] == om) & (elec_df['Mesiac'] == m)]
-                
-                if not match_row.empty:
-                    excel_val = match_row['Náklady (€)'].values[0]
-                    diff = pdf_val - excel_val
-                    status = "✅ V poriadku" if abs(diff) < 1.0 else "⚠️ Rozdiel"
-                else:
-                    excel_val = 0.0
-                    diff = pdf_val
-                    status = "❓ Chýba v Exceli"
-
-                audit_records.append({
-                    "Odberné miesto": om,
-                    "Mesiac": m,
-                    "Číslo faktúry (VS)": inv['Číslo faktúry (VS)'],
-                    "PDF Spolu bez DPH (€)": pdf_val,
-                    "Excel Náklady (€)": excel_val,
-                    "Rozdiel (€)": diff,
-                    "Stav kontroly": status
-                })
-
-            df_audit = pd.DataFrame(audit_records)
-            st.dataframe(df_audit, use_container_width=True, hide_index=True)
-
-            st.divider()
-            
-            # --- FILTER NA KONKRÉTNE ODBERNÉ MIESTO ---
-            st.markdown("### 🔍 Filter odberných miest pre podrobnú analýzu")
+            # --- FILTER NA KONKRÉTNE ODBERNÉ MIESTO (HNEĎ NA VRCHU) ---
+            st.markdown("### 🔍 Filter odberných miest pre analýzu")
             unique_oms = ["Všetky odberné miesta"] + list(df_invoices['Odberné miesto'].unique())
             selected_single_om = st.selectbox("Vyber konkrétne odberné miesto:", options=unique_oms)
 
@@ -509,35 +467,51 @@ with tab4:
 
             st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
 
-            st.markdown("### 📈 Súhrnný prehľad načítaných faktúr (Zoradené od januára do decembra)")
+            # ==========================================
+            # KOLÁČOVÉ GRAFY S CELKOVÝMI SUMAMI V LEGENDE
+            # ==========================================
+            st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií")
             
             col_g1, col_g2 = st.columns(2)
             
             with col_g1:
-                df_melt_cost = df_filtered_inv.melt(
-                    id_vars=['Odberné miesto', 'Fakturačné obdobie'],
-                    value_vars=['Silová zložka (€)', 'Distribúcia celkom (€)'],
-                    var_name='Zložka', value_name='Suma (€)'
-                )
-                fig_g1 = px.bar(
-                    df_melt_cost, x='Fakturačné obdobie', y='Suma (€)', color='Zložka', barmode='group',
-                    title="Porovnané náklady: Silová zložka vs. Distribúcia",
+                tot_silova = df_filtered_inv['Silová zložka (€)'].sum()
+                tot_distrib = df_filtered_inv['Distribúcia celkom (€)'].sum()
+                
+                df_pie_cost = pd.DataFrame({
+                    'Zložka': [f"Silová zložka ({tot_silova:,.2f} €)", f"Distribúcia celkom ({tot_distrib:,.2f} €)"],
+                    'Suma': [tot_silova, tot_distrib]
+                })
+                
+                fig_pie1 = px.pie(
+                    df_pie_cost, names='Zložka', values='Suma', hole=0.4,
+                    title="Podiel nákladov: Silová zložka vs. Distribúcia",
                     template="plotly_dark"
                 )
-                st.plotly_chart(fig_g1, use_container_width=True)
+                fig_pie1.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
+                st.plotly_chart(fig_pie1, use_container_width=True)
 
             with col_g2:
-                df_melt_penalties = df_filtered_inv.melt(
-                    id_vars=['Odberné miesto', 'Fakturačné obdobie'],
-                    value_vars=['Prekročenie MRK (€)', 'Jalová elektrina (€)', 'Prirážka za účinník (€)'],
-                    var_name='Typ sankcie', value_name='Suma (€)'
-                )
-                fig_g2 = px.bar(
-                    df_melt_penalties, x='Fakturačné obdobie', y='Suma (€)', color='Typ sankcie', barmode='group',
+                tot_mrk = df_filtered_inv['Prekročenie MRK (€)'].sum()
+                tot_jalova = df_filtered_inv['Jalová elektrina (€)'].sum()
+                tot_ucinnik = df_filtered_inv['Prirážka za účinník (€)'].sum()
+                
+                df_pie_penalties = pd.DataFrame({
+                    'Typ sankcie': [
+                        f"Prekročenie MRK ({tot_mrk:,.2f} €)", 
+                        f"Jalová elektrina ({tot_jalova:,.2f} €)", 
+                        f"Prirážka za účinník ({tot_ucinnik:,.2f} €)"
+                    ],
+                    'Suma': [tot_mrk, tot_jalova, tot_ucinnik]
+                })
+                
+                fig_pie2 = px.pie(
+                    df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
                     title="Súhrn pokút a sankcií (MRK, Jalovina, Účinník)",
                     template="plotly_dark"
                 )
-                st.plotly_chart(fig_g2, use_container_width=True)
+                fig_pie2.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
+                st.plotly_chart(fig_pie2, use_container_width=True)
 
             st.divider()
             
@@ -578,5 +552,41 @@ with tab4:
                     st.text(row['Raw_Text'])
 
                 st.divider()
+
+            # ==========================================
+            # AUTOMATICKÁ KRÍŽOVÁ KONTROLA (PDF vs EXCEL) NA ÚPLNOM KONCI
+            # ==========================================
+            st.markdown("### 🔍 Automatická krížová kontrola (PDF vs. Excel)")
+            st.markdown("Porovnanie nákladov bez DPH vyťažených z nahratých PDF faktúr oproti hodnotám zapísaným v Exceli (`Spotreby energií.xlsx`).")
+
+            audit_records = []
+            for _, inv in df_invoices.iterrows():
+                om = inv['Odberné miesto']
+                m = inv['Mesiac']
+                pdf_val = inv['Spolu bez DPH (€)']
+
+                match_row = elec_df[(elec_df['Odberné miesto'] == om) & (elec_df['Mesiac'] == m)]
+                
+                if not match_row.empty:
+                    excel_val = match_row['Náklady (€)'].values[0]
+                    diff = pdf_val - excel_val
+                    status = "✅ V poriadku" if abs(diff) < 1.0 else "⚠️ Rozdiel"
+                else:
+                    excel_val = 0.0
+                    diff = pdf_val
+                    status = "❓ Chýba v Exceli"
+
+                audit_records.append({
+                    "Odberné miesto": om,
+                    "Mesiac": m,
+                    "Číslo faktúry (VS)": inv['Číslo faktúry (VS)'],
+                    "PDF Spolu bez DPH (€)": pdf_val,
+                    "Excel Náklady (€)": excel_val,
+                    "Rozdiel (€)": diff,
+                    "Stav kontroly": status
+                })
+
+            df_audit = pd.DataFrame(audit_records)
+            st.dataframe(df_audit, use_container_width=True, hide_index=True)
     else:
         st.info(f"V priečinku `{INVOICE_DIR}/` zatiaľ nie sú žiadne PDF faktúry.")
