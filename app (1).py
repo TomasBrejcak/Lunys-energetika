@@ -165,9 +165,15 @@ def parse_zse_pdf(pdf_path_or_file):
                 except:
                     pass
 
+    # --- SANKČNÉ POLOŽKY (RK, MRK, Jalovina, Účinník) ---
+    rk_prekrocenie = get_penalty_cost([
+        'Prekročenie rezervovanej kapacity', 
+        'Prekročenie RK',
+        'Tarifa za prekročenie rezervovanej kapacity'
+    ])
+    
     mrk_prekrocenie = get_penalty_cost([
         'Prekročenie maximálnej rezervovanej kapacity', 
-        'Prekročenie rezervovanej kapacity', 
         'Tarifa za prekročenie MRK',
         'Prekročenie MRK'
     ])
@@ -187,7 +193,7 @@ def parse_zse_pdf(pdf_path_or_file):
         'Účinník'
     ])
     
-    celkove_pokuty = mrk_prekrocenie + jalovina + ucinnik
+    celkove_pokuty = rk_prekrocenie + mrk_prekrocenie + jalovina + ucinnik
 
     spolu_bez_dph = 0.0
     rekap_match = re.search(r'(?:Základ dane celkom|Spolu bez DPH celkom|Celkom bez DPH).*?(\d{1,3}(?:\s?\d{3})*,\d{2})', text, re.IGNORECASE)
@@ -213,6 +219,7 @@ def parse_zse_pdf(pdf_path_or_file):
         "Spotreba (kWh)": silova_kwh,
         "Silová zložka (€)": silova_eur,
         "Distribúcia celkom (€)": distribucia_eur,
+        "Prekročenie RK (€)": rk_prekrocenie,
         "Prekročenie MRK (€)": mrk_prekrocenie,
         "Jalová elektrina (€)": jalovina,
         "Prirážka za účinník (€)": ucinnik,
@@ -492,22 +499,24 @@ with tab4:
                 st.plotly_chart(fig_pie1, use_container_width=True)
 
             with col_g2:
+                tot_rk = df_filtered_inv['Prekročenie RK (€)'].sum()
                 tot_mrk = df_filtered_inv['Prekročenie MRK (€)'].sum()
                 tot_jalova = df_filtered_inv['Jalová elektrina (€)'].sum()
                 tot_ucinnik = df_filtered_inv['Prirážka za účinník (€)'].sum()
                 
                 df_pie_penalties = pd.DataFrame({
                     'Typ sankcie': [
+                        f"Prekročenie RK ({tot_rk:,.2f} €)",
                         f"Prekročenie MRK ({tot_mrk:,.2f} €)", 
                         f"Jalová elektrina ({tot_jalova:,.2f} €)", 
                         f"Prirážka za účinník ({tot_ucinnik:,.2f} €)"
                     ],
-                    'Suma': [tot_mrk, tot_jalova, tot_ucinnik]
+                    'Suma': [tot_rk, tot_mrk, tot_jalova, tot_ucinnik]
                 })
                 
                 fig_pie2 = px.pie(
                     df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
-                    title="Súhrn pokút a sankcií (MRK, Jalovina, Účinník)",
+                    title="Súhrn pokút a sankcií (RK, MRK, Jalovina, Účinník)",
                     template="plotly_dark"
                 )
                 fig_pie2.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
@@ -526,12 +535,13 @@ with tab4:
                 c_f1, c_f2, c_f3, c_f4 = st.columns(4)
                 c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
                 c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
-                c_f3.metric("Prekročenie MRK", f"{row['Prekročenie MRK (€)']:,.2f} €", delta_color="inverse" if row['Prekročenie MRK (€)'] > 0 else "normal")
+                c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
                 c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
 
                 cost_breakdown = {
                     "Silová zložka (Komodita)": row['Silová zložka (€)'],
                     "Distribúcia celkom": row['Distribúcia celkom (€)'],
+                    "Prekročenie RK": row['Prekročenie RK (€)'],
                     "Prekročenie MRK": row['Prekročenie MRK (€)'],
                     "Jalová elektrina": row['Jalová elektrina (€)'],
                     "Prirážka za účinník": row['Prirážka za účinník (€)']
