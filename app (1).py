@@ -388,7 +388,7 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# --- PARSER ZSE FAKTÚR ---
+# --- PARSER ZSE FAKTÚR (MAPPING PODĽA EIC KÓDU) ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
@@ -1361,13 +1361,19 @@ elif selected_tab == TAB_NAMES[1]:
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
   if not filtered_elec.empty:
-    # Definícia podružných meraní na kompletné vynechanie
-    sub_to_exclude = ["Skladová hala I.", "Správa 99", "Bananáreň", "Zemiakareň"]
+    # Definícia presných hlavných odberných miest overených cez EIC
+    allowed_main_oms = [
+        "Trafostanica PEBEK",
+        "Trafostanica HARAMIA",
+        "Hlavný elektromer / Nájomcovia",
+        "Beňovský Apartments",
+        "Bratislava – Trafo Feld",
+    ]
 
-    # Dáta pre grafy: iba hlavné odberné miesta s PDF faktúrou (bez podružných)
+    # Filtrujeme iba 5 hlavných odberných miest, ktoré majú PDF faktúry
     df_price_plots = filtered_elec[
-        (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)") &
-        (~filtered_elec["Odberné miesto"].isin(sub_to_exclude))
+        (filtered_elec["Odberné miesto"].isin(allowed_main_oms))
+        & (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)")
     ].copy()
 
     col_p1, col_p2 = st.columns(2)
@@ -1414,9 +1420,11 @@ elif selected_tab == TAB_NAMES[2]:
         )
 
     st.divider()
-    st.markdown("### 📋 Prehľad hlavných odberných miest (bez podružných meraní)")
+    st.markdown(
+        "### 📋 Prehľad hlavných odberných miest (bez podružných meraní)"
+    )
 
-    # Dáta pre tabuľku pod grafmi: vynechávame Bananáreň, Zemiakareň, Správu 99, Skladovú halu I.
+    sub_to_exclude = ["Skladová hala I.", "Správa 99", "Bananáreň", "Zemiakareň"]
     df_table_clean = filtered_elec[
         ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
     ].copy()
