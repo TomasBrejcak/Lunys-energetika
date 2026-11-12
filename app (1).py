@@ -14,8 +14,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- VYTVORENIE PRIEČINKA PRE TRVALÉ UKLADANIE FAKTÚR ---
+# --- BEZPEČNÉ VYTVORENIE / OPRAVA PRIEČINKA PRE FAKTÚRY ---
 INVOICE_DIR = "faktury_zse"
+if os.path.exists(INVOICE_DIR) and not os.path.isdir(INVOICE_DIR):
+    try:
+        os.remove(INVOICE_DIR)
+    except:
+        pass
 if not os.path.exists(INVOICE_DIR):
     os.makedirs(INVOICE_DIR)
 
@@ -337,7 +342,7 @@ def load_excel_data():
 fve_df, excel_elec_df = load_excel_data()
 
 # Načítanie PDF faktúr pre hlavné miesta
-all_pdf_files = [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')] if os.path.exists(INVOICE_DIR) else []
+all_pdf_files = [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith('.pdf')] if (os.path.exists(INVOICE_DIR) and os.path.isdir(INVOICE_DIR)) else []
 parsed_invoice_records = []
 for f in all_pdf_files:
     f_path = os.path.join(INVOICE_DIR, f)
@@ -393,8 +398,10 @@ if all_possible_oms:
     col_s1, col_s2 = st.sidebar.columns(2)
     if col_s1.button("Vybrať všetko"):
         st.session_state.selected_oms = all_possible_oms
+        st.rerun()
     if col_s2.button("Zrušiť všetko"):
         st.session_state.selected_oms = []
+        st.rerun()
 
     updated_oms = []
     
@@ -584,10 +591,13 @@ elif selected_tab == TAB_NAMES[2]:
 elif selected_tab == TAB_NAMES[3]:
     st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
     
-    # Bezpečné čítanie priamo z parsovaných PDF súborov
+    # Prepojenie PDF dát s vybranými odbernými miestami v sidebare a mesiacmi
     pdf_only_df = pdf_elec_df.copy()
-    if not pdf_only_df.empty and selected_months:
-        pdf_only_df = pdf_only_df[pdf_only_df['Mesiac'].isin(selected_months)]
+    if not pdf_only_df.empty:
+        if selected_months:
+            pdf_only_df = pdf_only_df[pdf_only_df['Mesiac'].isin(selected_months)]
+        if st.session_state.selected_oms:
+            pdf_only_df = pdf_only_df[pdf_only_df['Odberné miesto'].isin(st.session_state.selected_oms)]
 
     if not pdf_only_df.empty:
         df_filtered_inv = pdf_only_df.copy()
@@ -668,7 +678,7 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
     else:
-        st.info("V priečinku `faktury_zse` zatiaľ nie sú k dispozícii žiadne úspešne načítané PDF faktúry, alebo vybraný mesiac neobsahuje PDF dáta.")
+        st.info("Pre vybrané odberné miesta / mesiace nie sú k dispozícii žiadne načítané PDF faktúry.")
 
     st.divider()
     st.markdown("### 📤 Nahranie ďalších PDF faktúr")
