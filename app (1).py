@@ -1361,23 +1361,33 @@ elif selected_tab == TAB_NAMES[1]:
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
   if not filtered_elec.empty:
+    # Filtrujeme iba dáta, ktoré majú zdroj z PDF faktúr (hlavné merania: Pebek, Haramia, Nájomcovia, Beňovský, Bratislava)
+    df_pdf_only_plots = filtered_elec[
+        filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)"
+    ]
+
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-      fig_price = px.line(
-          filtered_elec,
-          x="Mesiac",
-          y="Cena (€/kWh)",
-          color="Odberné miesto",
-          markers=True,
-          title="Celková jednotková cena (€/kWh) vrátane distribúcie",
-          template="plotly_dark",
-      )
-      st.plotly_chart(fig_price, use_container_width=True)
+      if not df_pdf_only_plots.empty:
+        fig_price = px.line(
+            df_pdf_only_plots,
+            x="Mesiac",
+            y="Cena (€/kWh)",
+            color="Odberné miesto",
+            markers=True,
+            title=(
+                "Celková jednotková cena (€/kWh) z PDF faktúr (hlavné odberné"
+                " miesta)"
+            ),
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_price, use_container_width=True)
+      else:
+        st.info("Pre zvolené filtre nie sú k dispozícii dáta z PDF faktúr.")
 
     with col_p2:
-      df_silova_plot = filtered_elec[
-          (filtered_elec["Cena silovej zložky (€/kWh)"] > 0)
-          & (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)")
+      df_silova_plot = df_pdf_only_plots[
+          df_pdf_only_plots["Cena silovej zložky (€/kWh)"] > 0
       ]
       if not df_silova_plot.empty:
         fig_silova = px.line(
@@ -1387,8 +1397,8 @@ elif selected_tab == TAB_NAMES[2]:
             color="Odberné miesto",
             markers=True,
             title=(
-                "Čistá cena silovej zložky (€/kWh) z PDF faktúr (bez podružných"
-                " meraní)"
+                "Čistá cena silovej zložky (€/kWh) z PDF faktúr (hlavné odberné"
+                " miesta)"
             ),
             template="plotly_dark",
         )
@@ -1577,8 +1587,7 @@ elif selected_tab == TAB_NAMES[3]:
         st.text(row["Raw_Text"])
   else:
     st.info("Pre zvolené filtre neboli nájdené žiadne spracované PDF faktúry.")
-    
-    # Pridávame možnost nahrať faktúry aj v prípade, ak žiadne dáta zatiaľ zobrazené nie sú
+
     st.divider()
     with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
       uploaded_files = st.file_uploader(
