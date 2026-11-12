@@ -517,7 +517,6 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       if any(kw.lower() in line.lower() for kw in keyword):
         if "technické údaje" in line.lower():
           continue
-        # OPRAVENÉ PARSOVANIE TISÍCOV S MEDZEROU (napr. 12 345 kWh)
         m = re.search(
             r"([\d\s]+,\d{1,3}|\d{1,3}(?:\s?\d{3})+)\s*kWh", line, re.IGNORECASE
         )
@@ -1110,6 +1109,7 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
+# Očistený KPI dataframe pre správne súčty bez duplicity trafostaníc a podružných meraní
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
@@ -1221,15 +1221,23 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÝ OBSAH DASHBOARDU ---
-total_elec_kwh = filtered_elec["Spotreba (kWh)"].sum() if not filtered_elec.empty else 0.0
-total_elec_eur = filtered_elec["Náklady (€)"].sum() if not filtered_elec.empty else 0.0
+# --- HLAVNÝ OBSAH DASHBOARDU (OPRAVENÉ: POČÍTANIE Z OČISTENÉHO kpi_df) ---
+total_elec_kwh = (
+    kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
+)
+total_elec_eur = (
+    kpi_df["Náklady (€)"].sum() if not kpi_df.empty else 0.0
+)
 avg_price_per_kwh = (
     (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
 )
 
-total_fve_kwh = filtered_fve["Vyroba_kWh"].sum() if not filtered_fve.empty else 0.0
-total_fve_eur = filtered_fve["Uspora_EUR"].sum() if not filtered_fve.empty else 0.0
+total_fve_kwh = (
+    filtered_fve["Vyroba_kWh"].sum() if not filtered_fve.empty else 0.0
+)
+total_fve_eur = (
+    filtered_fve["Uspora_EUR"].sum() if not filtered_fve.empty else 0.0
+)
 
 st.subheader("📊 Kľúčové ukazovatele 2026")
 c1, c2, c3, c4, c5 = st.columns(5)
@@ -1398,9 +1406,13 @@ elif selected_tab == TAB_NAMES[3]:
       ]
 
   if not pdf_only_df.empty:
-    df_filtered_inv = pdf_only_df.drop_duplicates(
-        subset=["EIC", "Číslo faktúry (VS)"], keep="first"
-    ).sort_values(by="_sort_date", ascending=True).reset_index(drop=True)
+    df_filtered_inv = (
+        pdf_only_df.drop_duplicates(
+            subset=["EIC", "Číslo faktúry (VS)"], keep="first"
+        )
+        .sort_values(by="_sort_date", ascending=True)
+        .reset_index(drop=True)
+    )
 
     st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
     st.divider()
