@@ -365,6 +365,68 @@ if not pdf_elec_df.empty:
 else:
     elec_df = excel_elec_df
 
+# --- KONTROLA A SYNCHRONIZÁCIA PODRUŽNÝCH MERANÍ S TRAFAMI ---
+# Aby súčet Skladovej haly I. + Správa 99 presne sedel na Trafostanicu PEBEK (a Bananáreň + Zemiakareň na Haramiu)
+if not elec_df.empty:
+    # 1. PEBEK: Súčet Skladová hala I. + Správa 99 nahradí hodnoty Trafostanice PEBEK, ak chýba PDF faktúra alebo pre presnú zhodu
+    pebek_subs = elec_df[elec_df['Odberné miesto'].isin(["Skladová hala I.", "Správa 99"])]
+    if not pebek_subs.empty:
+        pebek_agg = pebek_subs.groupby(['Mesiac', 'Lokalita']).agg({
+            'Spotreba (kWh)': 'sum',
+            'Náklady (€)': 'sum'
+        }).reset_index()
+        pebek_agg['Odberné miesto'] = 'Trafostanica PEBEK'
+        pebek_agg['Cena (€/kWh)'] = pebek_agg.apply(lambda r: r['Náklady (€)'] / r['Spotreba (kWh)'] if r['Spotreba (kWh)'] > 0 else 0.0, axis=1)
+        pebek_agg['Zdroj'] = 'Agregát (Skladová hala I. + Správa 99)'
+        
+        # Ak Trafostanica PEBEK nemá nahraté PDF, doplníme ju alebo prepíšeme presným súčtom z Excelu
+        for idx, row in pebek_agg.iterrows():
+            mask = (elec_df['Odberné miesto'] == 'Trafostanica PEBEK') & (elec_df['Mesiac'] == row['Mesiac'])
+            if not elec_df[mask].empty and elec_df[mask]['Zdroj'].values[0] != 'PDF Faktúra (ZSE)':
+                elec_df.loc[mask, 'Spotreba (kWh)'] = row['Spotreba (kWh)']
+                elec_df.loc[mask, 'Náklady (€)'] = row['Náklady (€)']
+                elec_df.loc[mask, 'Cena (€/kWh)'] = row['Cena (€/kWh)']
+            elif elec_df[mask].empty:
+                new_row = {
+                    'Mesiac': row['Mesiac'],
+                    'Lokalita': row['Lokalita'],
+                    'Odberné miesto': 'Trafostanica PEBEK',
+                    'Spotreba (kWh)': row['Spotreba (kWh)'],
+                    'Náklady (€)': row['Náklady (€)'],
+                    'Cena (€/kWh)': row['Cena (€/kWh)'],
+                    'Zdroj': 'Agregát (Skladová hala I. + Správa 99)'
+                }
+                elec_df = pd.concat([elec_df, pd.DataFrame([new_row])], ignore_index=True)
+
+    # 2. HARAMIA: Súčet Bananáreň + Zemiakareň nahradí hodnoty Trafostanice HARAMIA pre presnú zhodu
+    haramia_subs = elec_df[elec_df['Odberné miesto'].isin(["Bananáreň", "Zemiakareň"])]
+    if not haramia_subs.empty:
+        haramia_agg = haramia_subs.groupby(['Mesiac', 'Lokalita']).agg({
+            'Spotreba (kWh)': 'sum',
+            'Náklady (€)': 'sum'
+        }).reset_index()
+        haramia_agg['Odberné miesto'] = 'Trafostanica HARAMIA'
+        haramia_agg['Cena (€/kWh)'] = haramia_agg.apply(lambda r: r['Náklady (€)'] / r['Spotreba (kWh)'] if r['Spotreba (kWh)'] > 0 else 0.0, axis=1)
+        haramia_agg['Zdroj'] = 'Agregát (Bananáreň + Zemiakareň)'
+        
+        for idx, row in haramia_agg.iterrows():
+            mask = (elec_df['Odberné miesto'] == 'Trafostanica HARAMIA') & (elec_df['Mesiac'] == row['Mesiac'])
+            if not elec_df[mask].empty and elec_df[mask]['Zdroj'].values[0] != 'PDF Faktúra (ZSE)':
+                elec_df.loc[mask, 'Spotreba (kWh)'] = row['Spotreba (kWh)']
+                elec_df.loc[mask, 'Náklady (€)'] = row['Náklady (€)']
+                elec_df.loc[mask, 'Cena (€/kWh)'] = row['Cena (€/kWh)']
+            elif elec_df[mask].empty:
+                new_row = {
+                    'Mesiac': row['Mesiac'],
+                    'Lokalita': row['Lokalita'],
+                    'Odberné miesto': 'Trafostanica HARAMIA',
+                    'Spotreba (kWh)': row['Spotreba (kWh)'],
+                    'Náklady (€)': row['Náklady (€)'],
+                    'Cena (€/kWh)': row['Cena (€/kWh)'],
+                    'Zdroj': 'Agregát (Bananáreň + Zemiakareň)'
+                }
+                elec_df = pd.concat([elec_df, pd.DataFrame([new_row])], ignore_index=True)
+
 # --- INITIALIZÁCIA STAVU ZÁLOŽIEK ---
 TAB_NAMES = [
     "📉 Spotreby & Náklady Odberných Miest", 
@@ -473,7 +535,7 @@ if not filtered_elec.empty:
     filtered_elec['Mesiac'] = pd.Categorical(filtered_elec['Mesiac'], categories=month_order, ordered=True)
     filtered_elec = filtered_elec.sort_values('Mesiac')
 
-# --- BEZPEČNÝ VÝPOČET KPI SÚHRNOV (ZABRÁNENIE DUPLICITNÉMU SČÍTANIU TRAFA A PODRUŽNÝCH MERANÍ) ---
+# --- BEZPEČNÝ VÝPOČET KPI SÚHRNOV (ELIMINÁCIA DUPLICITY TRAFA A PODRUŽNÝCH MERANÍ) ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
     if "Trafostanica PEBEK" in kpi_df['Odberné miesto'].values:
@@ -637,7 +699,7 @@ elif selected_tab == TAB_NAMES[3]:
             )
             fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
             st.plotly_chart(fig_pie2, use_container_width=True)
-            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
+            st.markdown(f"**Spolu pokuty a sankcií: {sum_penalties_total:,.2f} €**")
 
         st.divider()
 
