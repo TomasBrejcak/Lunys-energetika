@@ -815,12 +815,19 @@ for f in all_pdf_files:
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
-# Spojenie dát
+# --- SPOJENIE DÁT S PREFERENCIOU PDF FAKTÚR (ZABRÁNENIE NULÁM Z EXCELU) ---
 if not pdf_elec_df.empty:
-  elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
-  elec_df = elec_df.drop_duplicates(
-      subset=["Odberné miesto", "Mesiac"], keep="first"
+  # Zistíme, ktoré kombinácie (Odberné miesto, Mesiac) máme reálne v PDF faktúrach
+  pdf_keys = set(
+      zip(pdf_elec_df["Odberné miesto"], pdf_elec_df["Mesiac"])
   )
+  
+  # Z Excelu vyfiltrujeme preč tie riadky, ktoré už sú pokryté PDF faktúrou
+  if not excel_elec_df.empty:
+    excel_elec_df["_key"] = list(zip(excel_elec_df["Odberné miesto"], excel_elec_df["Mesiac"]))
+    excel_elec_df = excel_elec_df[~excel_elec_df["_key"].isin(pdf_keys)].drop(columns=["_key"])
+
+  elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
 else:
   elec_df = excel_elec_df
 
