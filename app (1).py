@@ -10,12 +10,33 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-# Nastavenie stránky
+# --- NASTAVENIE STRÁNKY A RESPONSÍVNEHO CSS ---
 st.set_page_config(
     page_title="Energetický Dashboard LUNYS 2026",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    /* Čistšie odsadenie a responsivita pre mobil aj desktop */
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+    @media (max-width: 768px) {
+        .block-container {
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }
+    }
+    </style>
+""",
+    unsafe_allow_html=True,
 )
 
 # --- BEZPEČNÉ VYTVORENIE / OPRAVA PRIEČINKA PRE FAKTÚRY ---
@@ -817,23 +838,19 @@ pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
 # --- SPOJENIE DÁT S PRÍSNYM VYNECHANÍM EXCELU PRE HLAVNÉ OM, AK EXISTUJE PDF ---
 if not pdf_elec_df.empty:
-  # Zistíme, ktoré odberné miesta majú aspoň jednu reálnu PDF faktúru
   oms_with_pdf = set(pdf_elec_df["Odberné miesto"].unique())
-  
-  # Z Excelu kompletne vymažeme všetky záznamy pre tie odberné miesta, ktoré už ťaháme z PDF faktúr
   if not excel_elec_df.empty:
     excel_elec_df = excel_elec_df[~excel_elec_df["Odberné miesto"].isin(oms_with_pdf)]
-
   elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
 else:
   elec_df = excel_elec_df
 
 # --- STAV A HIERARCHICKÝ VÝBER ODBERNÝCH MIEST ---
 TAB_NAMES = [
-    "📉 Spotreby & Náklady Odberných Miest",
-    "☀️ Výkon Fotovoltiky (FVE)",
-    "💶 Cena za 1 kWh",
-    "📄 Analýza PDF Faktúr & Audit",
+    "📉 Spotreby & Náklady",
+    "☀️ FVE",
+    "💶 Cena 1 kWh",
+    "📄 PDF Faktúry",
 ]
 
 if "active_tab" not in st.session_state:
@@ -932,7 +949,7 @@ for om in all_possible_oms:
 st.sidebar.subheader("🏢 Výber odberných miest")
 if all_possible_oms:
   col_s1, col_s2 = st.sidebar.columns(2)
-  if col_s1.button("Vybrať všetko", key="btn_all_oms", use_container_width=True):
+  if col_s1.button("Všetko", key="btn_all_oms", use_container_width=True):
     st.session_state.selected_oms = list(all_possible_oms)
     for parent, children in OM_GROUPS.items():
       st.session_state[_om_key("grp", parent)] = True
@@ -942,7 +959,7 @@ if all_possible_oms:
     for om in all_possible_oms:
       st.session_state[_om_key("om", om)] = True
     st.rerun()
-  if col_s2.button("Zrušiť všetko", key="btn_none_oms", use_container_width=True):
+  if col_s2.button("Zrušiť", key="btn_none_oms", use_container_width=True):
     st.session_state.selected_oms = []
     for parent, children in OM_GROUPS.items():
       st.session_state[_om_key("grp", parent)] = False
@@ -978,14 +995,6 @@ if all_possible_oms:
               key=_om_key("om", child),
               on_change=_set_child_selection,
               args=(child, parent, visible_children),
-          )
-        chosen_children = sum(
-            x in st.session_state.selected_oms for x in visible_children
-        )
-        if 0 < chosen_children < len(visible_children):
-          st.sidebar.caption(
-              f"Čiastočný výber: {chosen_children}/{len(visible_children)}"
-              " podružných meraní"
           )
 
   grouped_names = {parent for parent in OM_GROUPS}
@@ -1064,7 +1073,7 @@ else:
       if m in available_month_nums
   ]
 selected_month_nums = st.sidebar.multiselect(
-    "📅 Vyber mesiace (2026)",
+    "📅 Mesiace (2026)",
     options=available_month_nums,
     format_func=lambda m: num_to_month[m],
     key="global_month_filter",
@@ -1073,8 +1082,8 @@ selected_months = [num_to_month[m] for m in selected_month_nums]
 
 st.sidebar.divider()
 
-# --- MANAŽÉRSKE REPORTY V ĽAVOM PANELI (SIDEBAR) ---
-st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
+# --- MANAŽÉRSKE REPORTY V SIDEBARE ---
+st.sidebar.subheader("📥 Reporty & Exporty")
 
 filtered_fve = (
     fve_df[fve_df["Mesiac"].isin(selected_months)].copy()
@@ -1107,7 +1116,6 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-# --- OČISTENÝ kpi_df PRE HLAVNÉ KPI KARTY (BEZ DUPLICÍT TRAF) ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
@@ -1126,7 +1134,6 @@ if not pdf_elec_df.empty and selected_months and st.session_state.selected_oms:
       & pdf_elec_df["Odberné miesto"].isin(st.session_state.selected_oms)
   ].copy()
 
-# 1. Prezentačný Excel report celého vybraného portfólia
 if not filtered_elec.empty:
   excel_data = build_presentation_excel(
       df_detail=filtered_elec,
@@ -1139,7 +1146,7 @@ if not filtered_elec.empty:
   )
 
   st.sidebar.download_button(
-      label="📊 Stiahnuť manažérsky Excel report",
+      label="📊 Stiahnuť Excel report",
       data=excel_data,
       file_name="LUNYS_Energeticky_Report_2026.xlsx",
       mime=(
@@ -1148,48 +1155,8 @@ if not filtered_elec.empty:
       use_container_width=True,
   )
 
-# 2. Výber miesta pre individuálny prezentačný Excel audit
-if st.session_state.selected_oms and not filtered_elec.empty:
-  selected_rep_om = st.sidebar.selectbox(
-      "Vyber miesto pre detailný audit:",
-      options=st.session_state.selected_oms,
-      key="rep_om_select",
-  )
-
-  om_rep_df = filtered_elec[
-      filtered_elec["Odberné miesto"] == selected_rep_om
-  ].copy()
-  om_inv_df = (
-      pdf_filtered_for_export[
-          pdf_filtered_for_export["Odberné miesto"] == selected_rep_om
-      ].copy()
-      if not pdf_filtered_for_export.empty
-      else pd.DataFrame()
-  )
-
-  if not om_rep_df.empty:
-    om_excel_data = build_presentation_excel(
-        df_detail=om_rep_df,
-        df_kpi_clean=om_rep_df,
-        df_invoices=om_inv_df,
-        df_fve=pd.DataFrame(),
-        selected_months_list=selected_months,
-        selected_oms_list=[selected_rep_om],
-        report_title=f"AUDIT ODBERNÉHO MIESTA: {selected_rep_om.upper()}",
-    )
-    st.sidebar.download_button(
-        label=f"📄 Stiahnuť Excel audit: {selected_rep_om}",
-        data=om_excel_data,
-        file_name=f"Audit_{selected_rep_om.replace(' ', '_')}_2026.xlsx",
-        mime=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-        use_container_width=True,
-    )
-
 st.sidebar.divider()
-
-st.sidebar.subheader("⚡ Rýchla navigácia")
+st.sidebar.subheader("⚡ Navigácia")
 if st.sidebar.button(
     "📉 Spotreby & Náklady",
     use_container_width=True,
@@ -1212,14 +1179,14 @@ if st.sidebar.button(
 ):
   pass
 if st.sidebar.button(
-    "📄 Analýza PDF Faktúr",
+    "📄 Analýza PDF",
     use_container_width=True,
     on_click=set_tab,
     args=(TAB_NAMES[3],),
 ):
   pass
 
-# --- HLAVNÝ OBSAH DASHBOARDU (POUŽÍVA ČISTÝ kpi_df) ---
+# --- HLAVNÉ KPI KARTY (RESPONSÍVNE) ---
 total_elec_kwh = (
     kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
 )
@@ -1229,7 +1196,6 @@ total_elec_eur = (
 avg_price_per_kwh = (
     (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
 )
-
 total_fve_kwh = (
     filtered_fve["Vyroba_kWh"].sum() if not filtered_fve.empty else 0.0
 )
@@ -1239,17 +1205,16 @@ total_fve_eur = (
 
 st.subheader("📊 Kľúčové ukazovatele 2026")
 c1, c2, c3, c4, c5 = st.columns(5)
-
-c1.metric("🔌 Odber zo siete (Spolu)", f"{total_elec_kwh:,.0f} kWh")
-c2.metric("💶 Náklady na sieť spolu", f"{total_elec_eur:,.2f} €")
-c3.metric("☀️ Výroba FVE", f"{total_fve_kwh:,.0f} kWh")
-c4.metric("💰 Úspora FVE", f"{total_fve_eur:,.2f} €")
-c5.metric("⚡ Priemerná cena 1 kWh", f"{avg_price_per_kwh:.4f} €/kWh")
+c1.metric("🔌 Odber (Spolu)", f"{total_elec_kwh:,.0f} kWh")
+c2.metric("💶 Náklady", f"{total_elec_eur:,.2f} €")
+c3.metric("☀️ FVE Výroba", f"{total_fve_kwh:,.0f} kWh")
+c4.metric("💰 FVE Úspora", f"{total_fve_eur:,.2f} €")
+c5.metric("⚡ Priemer 1 kWh", f"{avg_price_per_kwh:.4f} €")
 
 st.divider()
 
 selected_tab = st.radio(
-    "Zvoľ sekciu dashboardu:",
+    "Zvoľ sekciu:",
     TAB_NAMES,
     key="active_tab",
     horizontal=True,
@@ -1271,6 +1236,11 @@ if selected_tab == TAB_NAMES[0]:
           title="Spotreba elektriny (kWh)",
           template="plotly_dark",
       )
+      fig_elec_kwh.update_layout(
+          legend=dict(
+              orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5
+          )
+      )
       st.plotly_chart(fig_elec_kwh, use_container_width=True)
     with col_right:
       fig_elec_eur = px.bar(
@@ -1281,6 +1251,11 @@ if selected_tab == TAB_NAMES[0]:
           barmode="group",
           title="Mesačné náklady bez DPH (€)",
           template="plotly_dark",
+      )
+      fig_elec_eur.update_layout(
+          legend=dict(
+              orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5
+          )
       )
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
@@ -1303,9 +1278,8 @@ if selected_tab == TAB_NAMES[0]:
 
 elif selected_tab == TAB_NAMES[1]:
   st.subheader("☀️ Výkon a úspory FVE")
-
   fve_lokalita_filter = st.radio(
-      "📍 Vyber lokalitu pre FVE:",
+      "📍 Lokalita:",
       options=["Všetky lokality", "Poprad", "Bratislava"],
       horizontal=True,
       key="fve_lok_filter",
@@ -1326,13 +1300,14 @@ elif selected_tab == TAB_NAMES[1]:
         .reset_index()
     )
 
-    pie_labels_kwh = []
-    pie_labels_eur = []
-    for idx, row in summary_fve.iterrows():
-      loc = row["Lokalita_raw"]
-      pie_labels_kwh.append(f"{loc}: {row['Vyroba_kWh']:,.0f} kWh")
-      pie_labels_eur.append(f"{loc}: {row['Uspora_EUR']:,.0f} €")
-
+    pie_labels_kwh = [
+        f"{row['Lokalita_raw']}: {row['Vyroba_kWh']:,.0f} kWh"
+        for _, row in summary_fve.iterrows()
+    ]
+    pie_labels_eur = [
+        f"{row['Lokalita_raw']}: {row['Uspora_EUR']:,.0f} €"
+        for _, row in summary_fve.iterrows()
+    ]
     summary_fve["Label_KWh"] = pie_labels_kwh
     summary_fve["Label_EUR"] = pie_labels_eur
 
@@ -1342,7 +1317,7 @@ elif selected_tab == TAB_NAMES[1]:
           summary_fve,
           names="Label_KWh",
           values="Vyroba_kWh",
-          title="Podiel lokalít na celkovej výrobe FVE",
+          title="Podiel na výrobe FVE",
           hole=0.4,
           template="plotly_dark",
       )
@@ -1352,7 +1327,7 @@ elif selected_tab == TAB_NAMES[1]:
           summary_fve,
           names="Label_EUR",
           values="Uspora_EUR",
-          title="Podiel lokalít na finančných úsporách",
+          title="Podiel na úsporách",
           hole=0.4,
           template="plotly_dark",
       )
@@ -1360,10 +1335,10 @@ elif selected_tab == TAB_NAMES[1]:
 
     st.dataframe(tab_fve_df, use_container_width=True, hide_index=True)
   else:
-    st.info("FVE dáta pre zvolenú lokalitu nie sú k dispozícii.")
+    st.info("FVE dáta nie sú k dispozícii.")
 
 elif selected_tab == TAB_NAMES[2]:
-  st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
+  st.subheader("💶 Jednotkové ceny za 1 kWh")
   if not filtered_elec.empty:
     allowed_main_oms = [
         "Trafostanica PEBEK",
@@ -1372,7 +1347,6 @@ elif selected_tab == TAB_NAMES[2]:
         "Beňovský Apartments",
         "Bratislava – Trafo Feld",
     ]
-
     df_price_plots = filtered_elec[
         filtered_elec["Odberné miesto"].isin(allowed_main_oms)
     ].copy()
@@ -1386,20 +1360,23 @@ elif selected_tab == TAB_NAMES[2]:
             y="Cena (€/kWh)",
             color="Odberné miesto",
             markers=True,
-            title=(
-                "Celková jednotková cena (€/kWh) – Všetkých 5 hlavných miest"
-            ),
+            title="Celková jednotková cena (€/kWh)",
             template="plotly_dark",
         )
-        fig_price.update_layout(xaxis={"categoryorder": "array", "categoryarray": month_order})
+        fig_price.update_layout(
+            xaxis={"categoryorder": "array", "categoryarray": month_order},
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5
+            ),
+        )
         st.plotly_chart(fig_price, use_container_width=True)
-      else:
-        st.info("Pre zvolené filtre nie sú k dispozícii dáta.")
 
     with col_p2:
       df_silova_plot = df_price_plots.copy()
       if "Cena silovej zložky (€/kWh)" in df_silova_plot.columns:
-        df_silova_plot["Cena silovej zložky (€/kWh)"] = df_silova_plot["Cena silovej zložky (€/kWh)"].fillna(0.0)
+        df_silova_plot["Cena silovej zložky (€/kWh)"] = df_silova_plot[
+            "Cena silovej zložky (€/kWh)"
+        ].fillna(0.0)
 
       if not df_silova_plot.empty:
         fig_silova = px.line(
@@ -1408,45 +1385,21 @@ elif selected_tab == TAB_NAMES[2]:
             y="Cena silovej zložky (€/kWh)",
             color="Odberné miesto",
             markers=True,
-            title=(
-                "Čistá cena silovej zložky (€/kWh) – Všetkých 5 hlavných miest"
-            ),
+            title="Čistá cena silovej zložky (€/kWh)",
             template="plotly_dark",
         )
-        fig_silova.update_layout(xaxis={"categoryorder": "array", "categoryarray": month_order})
+        fig_silova.update_layout(
+            xaxis={"categoryorder": "array", "categoryarray": month_order},
+            legend=dict(
+                orientation="h", yanchor="top", y=-0.3, xanchor="center", x=0.5
+            ),
+        )
         st.plotly_chart(fig_silova, use_container_width=True)
-      else:
-        st.info("Pre vybrané filtre nie sú k dispozícii dáta silovej zložky.")
-
-    st.divider()
-    st.markdown(
-        "### 📋 Prehľad hlavných odberných miest (bez podružných meraní)"
-    )
-
-    sub_to_exclude = ["Skladová hala I.", "Správa 99", "Bananáreň", "Zemiakareň"]
-    df_table_clean = filtered_elec[
-        ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
-    ].copy()
-
-    st.dataframe(
-        df_table_clean[[
-            "Mesiac",
-            "Odberné miesto",
-            "Spotreba (kWh)",
-            "Náklady (€)",
-            "Cena (€/kWh)",
-            "Cena silovej zložky (€/kWh)",
-            "Zdroj",
-        ]],
-        use_container_width=True,
-        hide_index=True,
-    )
   else:
-    st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
+    st.info("Žiadne dáta.")
 
 elif selected_tab == TAB_NAMES[3]:
-  st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
-
+  st.subheader("📄 Analýza PDF faktúr zo ZSE")
   pdf_only_df = pdf_elec_df.copy()
   if not pdf_only_df.empty:
     if selected_months:
@@ -1465,21 +1418,17 @@ elif selected_tab == TAB_NAMES[3]:
         .reset_index(drop=True)
     )
 
-    st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
+    st.success(f"Zobrazených faktúr: {len(df_filtered_inv)}")
     st.divider()
 
-    st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií z faktúr")
     col_g1, col_g2 = st.columns(2)
-
     with col_g1:
       tot_silova = df_filtered_inv["Silová zložka (€)"].sum()
       tot_distrib = df_filtered_inv["Distribúcia celkom (€)"].sum()
-      sum_cost_total = df_filtered_inv["Spolu bez DPH (€)"].sum()
-
       df_pie_cost = pd.DataFrame({
           "Zložka": [
-              f"Silová zložka ({tot_silova:,.2f} €)",
-              f"Distribúcia celkom ({tot_distrib:,.2f} €)",
+              f"Silová ({tot_silova:,.2f} €)",
+              f"Distribúcia ({tot_distrib:,.2f} €)",
           ],
           "Suma": [tot_silova, tot_distrib],
       })
@@ -1491,64 +1440,42 @@ elif selected_tab == TAB_NAMES[3]:
           template="plotly_dark",
       )
       st.plotly_chart(fig_pie1, use_container_width=True)
-      st.markdown(f"**Spolu fakturované náklady bez DPH: {sum_cost_total:,.2f} €**")
 
     with col_g2:
       tot_rk = df_filtered_inv["Prekročenie RK (€)"].sum()
       tot_mrk = df_filtered_inv["Prekročenie MRK (€)"].sum()
       tot_jalova = df_filtered_inv["Jalová elektrina (€)"].sum()
       tot_ucinnik = df_filtered_inv["Prirážka za účinník (€)"].sum()
-      sum_penalties_total = tot_rk + tot_mrk + tot_jalova + tot_ucinnik
-
       df_pie_penalties = pd.DataFrame({
-          "Typ sankcie": [
-              f"Prekročenie RK ({tot_rk:,.2f} €)",
-              f"Prekročenie MRK ({tot_mrk:,.2f} €)",
-              f"Jalová elektrina ({tot_jalova:,.2f} €)",
-              f"Prirážka za účinník ({tot_ucinnik:,.2f} €)",
+          "Sankcia": [
+              f"RK ({tot_rk:,.2f} €)",
+              f"MRK ({tot_mrk:,.2f} €)",
+              f"Jalová ({tot_jalova:,.2f} €)",
+              f"Účinník ({tot_ucinnik:,.2f} €)",
           ],
           "Suma": [tot_rk, tot_mrk, tot_jalova, tot_ucinnik],
       })
       fig_pie2 = px.pie(
           df_pie_penalties,
-          names="Typ sankcie",
+          names="Sankcia",
           values="Suma",
           hole=0.4,
           template="plotly_dark",
       )
       st.plotly_chart(fig_pie2, use_container_width=True)
-      st.markdown(f"**Spolu pokuty a sankcií: {sum_penalties_total:,.2f} €**")
 
     st.divider()
-
-    st.markdown("### 📋 Prehľad jednotlivých faktúr")
-    display_cols = [
-        c
-        for c in df_filtered_inv.columns
-        if c not in ["Raw_Text", "_sort_date", "Mesiac", "Raw_Data"]
-    ]
-    st.dataframe(
-        df_filtered_inv[display_cols], use_container_width=True, hide_index=True
-    )
-
-    st.divider()
-
-    # --- NAHRÁVANIE A SPRÁVA PDF FAKTÚR (UMIESTNENÉ HNEĎ POD TABUĽKOU) ---
-    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=False):
+    with st.expander("📥 Správa a nahranie PDF faktúr", expanded=False):
       uploaded_files = st.file_uploader(
-          "Vyber PDF faktúry zo ZSE na nahranie",
-          type=["pdf"],
-          accept_multiple_files=True,
-          key="pdf_uploader_tab",
+          "Nahrať ZSE PDF", type=["pdf"], accept_multiple_files=True
       )
-
       if uploaded_files:
-        for uploaded_file in uploaded_files:
-          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
-          if not os.path.exists(target_path):
-            with open(target_path, "wb") as f:
-              f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahrané.")
+        for uf in uploaded_files:
+          tp = os.path.join(INVOICE_DIR, uf.name)
+          if not os.path.exists(tp):
+            with open(tp, "wb") as f:
+              f.write(uf.getbuffer())
+        st.success("Nahraté.")
         st.rerun()
 
       existing_pdfs = (
@@ -1556,88 +1483,23 @@ elif selected_tab == TAB_NAMES[3]:
           if os.path.exists(INVOICE_DIR)
           else []
       )
-      if existing_pdfs:
-        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
-        for pdf_file in existing_pdfs:
-          col_f1, col_f2 = st.columns([5, 1])
-          col_f1.text(pdf_file)
-          if col_f2.button("🗑️ Zmazať", key=f"del_{pdf_file}"):
-            try:
-              os.remove(os.path.join(INVOICE_DIR, pdf_file))
-              st.rerun()
-            except Exception as e:
-              st.error(f"Chyba pri mazaní: {e}")
-      else:
-        st.info(
-            "Zatiaľ nie sú v priečinku `faktury_zse` nahrané žiadne PDF súbory."
-        )
-
-    st.divider()
-
-    st.markdown("### 🔎 Detail faktúr podľa mesiacov")
-    for idx, row in df_filtered_inv.iterrows():
-      st.markdown(
-          f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']}"
-          f" ({row['Fakturačné obdobie']})"
-      )
-
-      c_f1, c_f2, c_f3, c_f4 = st.columns(4)
-      c_f1.metric(
-          "Cena silovej zložky",
-          f"{row['Cena silovej zložky (€/kWh)']:,.4f} €/kWh",
-      )
-      c_f2.metric(
-          "Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €"
-      )
-      c_f3.metric(
-          "Prekročenie RK / MRK",
-          f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €",
-      )
-      c_f4.metric(
-          "Jalová + Účinník",
-          f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €",
-      )
-
-      with st.expander(
-          "🔍 Diagnostika surového textu z PDF pre faktúru"
-          f" {row['Číslo faktúry (VS)']}"
-      ):
-        st.text(row["Raw_Text"])
+      for pf in existing_pdfs:
+        col_f1, col_f2 = st.columns([5, 1])
+        col_f1.text(pf)
+        if col_f2.button("🗑️", key=f"del_{pf}"):
+          os.remove(os.path.join(INVOICE_DIR, pf))
+          st.rerun()
   else:
-    st.info("Pre zvolené filtre neboli nájdené žiadne spracované PDF faktúry.")
-
-    st.divider()
-    st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True)
-    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
+    st.info("Žiadne PDF faktúry pre zvolené filtre.")
+    with st.expander("📥 Nahrať PDF faktúry", expanded=True):
       uploaded_files = st.file_uploader(
-          "Vyber PDF faktúry zo ZSE na nahranie",
-          type=["pdf"],
-          accept_multiple_files=True,
-          key="pdf_uploader_tab_empty",
+          "Nahrať ZSE PDF", type=["pdf"], accept_multiple_files=True
       )
-
       if uploaded_files:
-        for uploaded_file in uploaded_files:
-          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
-          if not os.path.exists(target_path):
-            with open(target_path, "wb") as f:
-              f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahrané.")
+        for uf in uploaded_files:
+          tp = os.path.join(INVOICE_DIR, uf.name)
+          if not os.path.exists(tp):
+            with open(tp, "wb") as f:
+              f.write(uf.getbuffer())
+        st.success("Nahraté.")
         st.rerun()
-
-      existing_pdfs = (
-          [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
-          if os.path.exists(INVOICE_DIR)
-          else []
-      )
-      if existing_pdfs:
-        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
-        for pdf_file in existing_pdfs:
-          col_f1, col_f2 = st.columns([5, 1])
-          col_f1.text(pdf_file)
-          if col_f2.button("🗑️ Zmazať", key=f"del_empty_{pdf_file}"):
-            try:
-              os.remove(os.path.join(INVOICE_DIR, pdf_file))
-              st.rerun()
-            except Exception as e:
-              st.error(f"Chyba pri mazaní: {e}")
