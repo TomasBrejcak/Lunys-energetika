@@ -534,8 +534,21 @@ if selected_tab == TAB_NAMES[0]:
 
 elif selected_tab == TAB_NAMES[1]:
     st.subheader("☀️ Výkon a úspory FVE")
-    if not filtered_fve.empty:
-        summary_fve = filtered_fve.groupby('Lokalita_raw').agg({'Vyroba_kWh': 'sum', 'Uspora_EUR': 'sum', 'Podiel_Pokrytia_Pct': 'mean'}).reset_index()
+    
+    # Pridaný filter lokalít priamo v záložke FVE
+    fve_lokalita_filter = st.radio(
+        "📍 Vyber lokalitu pre FVE:",
+        options=["Všetky lokality", "Poprad", "Bratislava"],
+        horizontal=True,
+        key="fve_lok_filter"
+    )
+    
+    tab_fve_df = filtered_fve.copy()
+    if fve_lokalita_filter != "Všetky lokality":
+        tab_fve_df = tab_fve_df[tab_fve_df['Lokalita_raw'] == fve_lokalita_filter]
+
+    if not tab_fve_df.empty:
+        summary_fve = tab_fve_df.groupby('Lokalita_raw').agg({'Vyroba_kWh': 'sum', 'Uspora_EUR': 'sum', 'Podiel_Pokrytia_Pct': 'mean'}).reset_index()
 
         pie_labels_kwh = []
         pie_labels_eur = []
@@ -555,9 +568,9 @@ elif selected_tab == TAB_NAMES[1]:
             fig_pie_eur = px.pie(summary_fve, names='Label_EUR', values='Uspora_EUR', title="Podiel lokalít na finančných úsporách", hole=0.4, template="plotly_dark")
             st.plotly_chart(fig_pie_eur, use_container_width=True)
 
-        st.dataframe(filtered_fve, use_container_width=True, hide_index=True)
+        st.dataframe(tab_fve_df, use_container_width=True, hide_index=True)
     else:
-        st.info("FVE dáta nie sú k dispozícii.")
+        st.info("FVE dáta pre zvolenú lokalitu nie sú k dispozícii.")
 
 elif selected_tab == TAB_NAMES[2]:
     st.subheader("💶 Reálna spotová cena za 1 kWh")
