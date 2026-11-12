@@ -270,6 +270,10 @@ def load_excel_data():
         val1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
         combined_text = f"{val0} {val1}".strip()
         
+        # Ignorovať nechcené riadky s "nové trafo"
+        if "nové trafo" in combined_text.lower() or "nove trafo" in combined_text.lower():
+            continue
+        
         if "bratislava" in combined_text.lower():
             current_lokalita = "Bratislava"
         elif "poprad" in combined_text.lower():
@@ -356,7 +360,7 @@ for f in all_pdf_files:
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
-# Spojenie dát (všetky reálne a plánované miesta z Excelu + PDF faktúry)
+# Spojenie dát
 if not pdf_elec_df.empty:
     elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
     elec_df = elec_df.drop_duplicates(subset=['Odberné miesto', 'Mesiac'], keep='first')
@@ -628,46 +632,4 @@ elif selected_tab == TAB_NAMES[3]:
                 'Suma': [tot_rk, tot_mrk, tot_jalova, tot_ucinnik]
             })
             
-            fig_pie2 = px.pie(
-                df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
-                title="Súhrn pokút a sankcií",
-                template="plotly_dark"
-            )
-            fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
-            st.plotly_chart(fig_pie2, use_container_width=True)
-            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
-
-        st.divider()
-
-        st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
-        display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac", "Raw_Data"]]
-        st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
-
-        st.divider()
-
-        st.markdown("### 🔎 Detail faktúr podľa mesiacov")
-        for idx, row in df_filtered_inv.iterrows():
-            st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
-            
-            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
-            c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
-            c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
-            c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
-            c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
-
-            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
-                st.text(row['Raw_Text'])
-
-            st.divider()
-    else:
-        st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania a plán sa načítavajú z Excelu).")
-
-    st.divider()
-    st.markdown("### 📤 Nahranie ďalších PDF faktúr")
-    uploaded_files = st.file_uploader("Pridaj ďalšie PDF faktúry:", type=["pdf"], accept_multiple_files=True, key="uploader_bottom")
-    if uploaded_files:
-        for uploaded_file in uploaded_files:
-            file_path = os.path.join(INVOICE_DIR, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-        st.success(f"Úspešne uložených {len(uploaded_files)} súborov do `{INVOICE_DIR}`. Obnov stránku.")
+            fig_pie
