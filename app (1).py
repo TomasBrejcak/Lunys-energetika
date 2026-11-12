@@ -222,11 +222,16 @@ def build_presentation_excel(
           cell.alignment = Alignment(horizontal="right")
         elif "Cena" in col_title:
           kwh_cols = [i + 1 for i, c in enumerate(cols) if "(kWh)" in c]
-          eur_cols = [
-              i + 1
-              for i, c in enumerate(cols)
-              if "Náklady" in c or "Spolu bez DPH" in c
-          ]
+          if "silovej" in col_title.lower():
+            eur_cols = [
+                i + 1 for i, c in enumerate(cols) if "Silová zložka (€)" in c
+            ]
+          else:
+            eur_cols = [
+                i + 1
+                for i, c in enumerate(cols)
+                if "Náklady" in c or "Spolu bez DPH" in c
+            ]
           if kwh_cols and eur_cols:
             k_let = get_column_letter(kwh_cols[0])
             e_let = get_column_letter(eur_cols[0])
@@ -512,11 +517,14 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       if any(kw.lower() in line.lower() for kw in keyword):
         if "technické údaje" in line.lower():
           continue
-        m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
+        # OPRAVENÉ PARSOVANIE TISÍCOV S MEDZEROU (napr. 12 345 kWh)
+        m = re.search(
+            r"([\d\s]+,\d{1,3}|\d{1,3}(?:\s?\d{3})+)\s*kWh", line, re.IGNORECASE
+        )
+        if not m:
+          m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
         if m:
-          val_str = (
-              m.group(1).split()[0].replace(" ", "").replace(",", ".")
-          )
+          val_str = m.group(1).replace(" ", "").replace(",", ".")
           try:
             val = float(val_str)
             if val < 10000000:
@@ -1073,18 +1081,20 @@ st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
 
 filtered_fve = (
     fve_df[fve_df["Mesiac"].isin(selected_months)].copy()
-    if not fve_df.empty
+    if not fve_df.empty and selected_months
     else pd.DataFrame()
 )
 rep_elec = (
     elec_df[elec_df["Mesiac"].isin(selected_months)].copy()
-    if not elec_df.empty
+    if not elec_df.empty and selected_months
     else pd.DataFrame()
 )
-if not rep_elec.empty:
+if not rep_elec.empty and st.session_state.selected_oms:
   rep_elec = rep_elec[
       rep_elec["Odberné miesto"].isin(st.session_state.selected_oms)
   ]
+else:
+  rep_elec = pd.DataFrame()
 
 filtered_elec = rep_elec.copy()
 
@@ -1112,7 +1122,7 @@ if not kpi_df.empty:
     ]
 
 pdf_filtered_for_export = pd.DataFrame()
-if not pdf_elec_df.empty:
+if not pdf_elec_df.empty and selected_months and st.session_state.selected_oms:
   pdf_filtered_for_export = pdf_elec_df[
       pdf_elec_df["Mesiac"].isin(selected_months)
       & pdf_elec_df["Odberné miesto"].isin(st.session_state.selected_oms)
@@ -1212,8 +1222,8 @@ if st.sidebar.button(
   pass
 
 # --- HLAVNÝ OBSAH DASHBOARDU ---
-total_elec_kwh = kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
-total_elec_eur = kpi_df["Náklady (€)"].sum() if not kpi_df.empty else 0.0
+total_elec_kwh = filtered_elec["Spotreba (kWh)"].sum() if not filtered_elec.empty else 0.0
+total_elec_eur = filtered_elec["Náklady (€)"].sum() if not filtered_elec.empty else 0.0
 avg_price_per_kwh = (
     (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
 )
@@ -1221,7 +1231,7 @@ avg_price_per_kwh = (
 total_fve_kwh = filtered_fve["Vyroba_kWh"].sum() if not filtered_fve.empty else 0.0
 total_fve_eur = filtered_fve["Uspora_EUR"].sum() if not filtered_fve.empty else 0.0
 
-st.subheader("📊 Kľúčové ukazovatele 2026 (Z vybraných miest a faktúr)")
+st.subheader("📊 Kľúčové ukazovatele 2026")
 c1, c2, c3, c4, c5 = st.columns(5)
 
 c1.metric("🔌 Odber zo siete (Spolu)", f"{total_elec_kwh:,.0f} kWh")
@@ -1269,17 +1279,6 @@ if selected_tab == TAB_NAMES[0]:
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
     st.divider()
-    col_sub1, col_sub2 = st.columns(2)
-    col_sub1.metric(
-        "Celková spotreba (čistý súhrn bez duplicity traf)",
-        f"{kpi_df['Spotreba (kWh)'].sum():,.0f} kWh",
-    )
-    col_sub2.metric(
-        "Celkové náklady (čistý súhrn bez duplicity traf)",
-        f"{kpi_df['Náklady (€)'].sum():,.2f} €",
-    )
-    st.divider()
-
     st.dataframe(
         filtered_elec[[
             "Mesiac",
@@ -1359,78 +1358,29 @@ elif selected_tab == TAB_NAMES[1]:
 
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
-  st.markdown(
-      "Pre prehľadnosť sú grafy rozdelené zvlášť na **celkovú cenu**"
-      " (vrátane distribúcie a pokút) a **čistú cenu silovej zložky** z PDF"
-      " faktúr."
-  )
-
   if not filtered_elec.empty:
-    # 1. GRAF: Celková cena za kWh
-    fig_total_price = px.line(
+    fig_price = px.line(
         filtered_elec,
         x="Mesiac",
         y="Cena (€/kWh)",
         color="Odberné miesto",
         markers=True,
-        title="📈 Celková cena za 1 kWh (€/kWh) – vrátane distribúcie a pokút",
+        title="Jednotková cena (€/kWh) podľa mesiacov",
         template="plotly_dark",
     )
-    fig_total_price.update_layout(
-        xaxis_title="Mesiac",
-        yaxis_title="Celková cena (€/kWh)",
-        hovermode="x unified",
-    )
-    st.plotly_chart(fig_total_price, use_container_width=True)
+    st.plotly_chart(fig_price, use_container_width=True)
 
-    st.divider()
-
-    # 2. GRAF: Čistá cena silovej zložky za kWh (iba miesta, kde sú dáta z PDF)
-    df_sila_only = filtered_elec[
-        filtered_elec["Cena silovej zložky (€/kWh)"] > 0
-    ].copy()
-    if not df_sila_only.empty:
-      fig_sila_price = px.line(
-          df_sila_only,
-          x="Mesiac",
-          y="Cena silovej zložky (€/kWh)",
-          color="Odberné miesto",
-          markers=True,
-          title=(
-              "⚡ Čistá cena silovej zložky za 1 kWh (€/kWh) – bez distribúcie"
-              " a pokút (PDF faktúry)"
-          ),
-          template="plotly_dark",
-      )
-      fig_sila_price.update_layout(
-          xaxis_title="Mesiac",
-          yaxis_title="Cena silovej zložky (€/kWh)",
-          hovermode="x unified",
-      )
-      st.plotly_chart(fig_sila_price, use_container_width=True)
-    else:
-      st.info(
-          "Pre zvolené filtre nie sú k dispozícii detailné dáta čistej silovej"
-          " zložky z PDF faktúr."
-      )
-
-    st.divider()
-    st.markdown("### 📋 Podrobný prehľad cien za kWh")
-    cols_to_show = [
-        c
-        for c in [
+    st.dataframe(
+        filtered_elec[[
             "Mesiac",
             "Odberné miesto",
             "Spotreba (kWh)",
             "Náklady (€)",
             "Cena (€/kWh)",
-            "Cena silovej zložky (€/kWh)",
             "Zdroj",
-        ]
-        if c in filtered_elec.columns
-    ]
-    st.dataframe(
-        filtered_elec[cols_to_show], use_container_width=True, hide_index=True
+        ]],
+        use_container_width=True,
+        hide_index=True,
     )
   else:
     st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
@@ -1448,13 +1398,9 @@ elif selected_tab == TAB_NAMES[3]:
       ]
 
   if not pdf_only_df.empty:
-    df_filtered_inv = pdf_only_df.copy()
-    df_filtered_inv = df_filtered_inv.drop_duplicates(
+    df_filtered_inv = pdf_only_df.drop_duplicates(
         subset=["EIC", "Číslo faktúry (VS)"], keep="first"
-    )
-    df_filtered_inv = df_filtered_inv.sort_values(
-        by="_sort_date", ascending=True
-    ).reset_index(drop=True)
+    ).sort_values(by="_sort_date", ascending=True).reset_index(drop=True)
 
     st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
     st.divider()
@@ -1465,7 +1411,7 @@ elif selected_tab == TAB_NAMES[3]:
     with col_g1:
       tot_silova = df_filtered_inv["Silová zložka (€)"].sum()
       tot_distrib = df_filtered_inv["Distribúcia celkom (€)"].sum()
-      sum_cost_total = tot_silova + tot_distrib
+      sum_cost_total = df_filtered_inv["Spolu bez DPH (€)"].sum()
 
       df_pie_cost = pd.DataFrame({
           "Zložka": [
@@ -1474,20 +1420,15 @@ elif selected_tab == TAB_NAMES[3]:
           ],
           "Suma": [tot_silova, tot_distrib],
       })
-
       fig_pie1 = px.pie(
           df_pie_cost,
           names="Zložka",
           values="Suma",
           hole=0.4,
-          title="Podiel nákladov: Silová zložka vs. Distribúcia",
           template="plotly_dark",
       )
-      fig_pie1.update_traces(
-          textinfo="percent+label", textfont=dict(size=13, color="white")
-      )
       st.plotly_chart(fig_pie1, use_container_width=True)
-      st.markdown(f"**Spolu náklady: {sum_cost_total:,.2f} €**")
+      st.markdown(f"**Spolu fakturované náklady bez DPH: {sum_cost_total:,.2f} €**")
 
     with col_g2:
       tot_rk = df_filtered_inv["Prekročenie RK (€)"].sum()
@@ -1505,24 +1446,18 @@ elif selected_tab == TAB_NAMES[3]:
           ],
           "Suma": [tot_rk, tot_mrk, tot_jalova, tot_ucinnik],
       })
-
       fig_pie2 = px.pie(
           df_pie_penalties,
           names="Typ sankcie",
           values="Suma",
           hole=0.4,
-          title="Súhrn pokút a sankcií",
           template="plotly_dark",
-      )
-      fig_pie2.update_traces(
-          textinfo="percent", textfont=dict(size=13, color="white")
       )
       st.plotly_chart(fig_pie2, use_container_width=True)
       st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
 
     st.divider()
 
-    st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
     display_cols = [
         c
         for c in df_filtered_inv.columns
@@ -1552,16 +1487,10 @@ elif selected_tab == TAB_NAMES[3]:
       c_f3.metric(
           "Prekročenie RK / MRK",
           f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €",
-          delta_color="inverse"
-          if (row["Prekročenie RK (€)"] + row["Prekročenie MRK (€)"]) > 0
-          else "normal",
       )
       c_f4.metric(
           "Jalová + Účinník",
           f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €",
-          delta_color="inverse"
-          if (row["Jalová elektrina (€)"] + row["Prirážka za účinník (€)"]) > 0
-          else "normal",
       )
 
       with st.expander(
