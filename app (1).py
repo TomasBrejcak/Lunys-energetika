@@ -780,6 +780,42 @@ def load_excel_data():
 
 fve_df, excel_elec_df = load_excel_data()
 
+# --- SPRÁVA A NAHRÁVANIE PDF FAKTÚR V SIDEBARE ---
+st.sidebar.subheader("📄 Správa PDF faktúr (ZSE)")
+uploaded_files = st.sidebar.file_uploader(
+    "Nahraj nové PDF faktúry",
+    type=["pdf"],
+    accept_multiple_files=True,
+    key="pdf_uploader",
+)
+
+if uploaded_files:
+  for uploaded_file in uploaded_files:
+    target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+    if not os.path.exists(target_path):
+      with open(target_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+
+# Zoznam už uložených faktúr v priečinku s možnosťou zmazania
+existing_pdfs = (
+    [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
+    if os.path.exists(INVOICE_DIR)
+    else []
+)
+if existing_pdfs:
+  with st.sidebar.expander(
+      f"Zoznam uložených faktúr ({len(existing_pdfs)})", expanded=False
+  ):
+    for pdf_file in existing_pdfs:
+      col_f1, col_f2 = st.columns([4, 1])
+      st.sidebar.text(pdf_file)
+      if st.sidebar.button(f"🗑️ Zmazať {pdf_file}", key=f"del_{pdf_file}"):
+        try:
+          os.remove(os.path.join(INVOICE_DIR, pdf_file))
+          st.rerun()
+        except Exception as e:
+          st.sidebar.error(f"Chyba pri mazaní: {e}")
+
 # Načítanie PDF faktúr pre hlavné miesta
 all_pdf_files = (
     [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
@@ -1375,7 +1411,6 @@ elif selected_tab == TAB_NAMES[2]:
       st.plotly_chart(fig_price, use_container_width=True)
 
     with col_p2:
-      # Graf silovej zložky berie len dáta, kde je reálne spočítaná (iba PDF faktúry s > 0)
       df_silova_plot = filtered_elec[
           (filtered_elec["Cena silovej zložky (€/kWh)"] > 0)
           & (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)")
