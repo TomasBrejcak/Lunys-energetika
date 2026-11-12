@@ -1375,16 +1375,30 @@ elif selected_tab == TAB_NAMES[2]:
       st.plotly_chart(fig_price, use_container_width=True)
 
     with col_p2:
-      fig_silova = px.line(
-          filtered_elec,
-          x="Mesiac",
-          y="Cena silovej zložky (€/kWh)",
-          color="Odberné miesto",
-          markers=True,
-          title="Čistá cena silovej zložky (€/kWh) z PDF faktúr",
-          template="plotly_dark",
-      )
-      st.plotly_chart(fig_silova, use_container_width=True)
+      # Graf silovej zložky berie len dáta, kde je reálne spočítaná (iba PDF faktúry s > 0)
+      df_silova_plot = filtered_elec[
+          (filtered_elec["Cena silovej zložky (€/kWh)"] > 0)
+          & (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)")
+      ]
+      if not df_silova_plot.empty:
+        fig_silova = px.line(
+            df_silova_plot,
+            x="Mesiac",
+            y="Cena silovej zložky (€/kWh)",
+            color="Odberné miesto",
+            markers=True,
+            title=(
+                "Čistá cena silovej zložky (€/kWh) z PDF faktúr (bez podružných"
+                " meraní)"
+            ),
+            template="plotly_dark",
+        )
+        st.plotly_chart(fig_silova, use_container_width=True)
+      else:
+        st.info(
+            "Pre vybrané filtre nie sú k dispozícii dáta silovej zložky z PDF"
+            " faktúr."
+        )
 
     st.divider()
     st.dataframe(
