@@ -1417,48 +1417,7 @@ elif selected_tab == TAB_NAMES[2]:
     st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
 
 elif selected_tab == TAB_NAMES[3]:
-  st.subheader("📄 Správa a analýza PDF faktúr zo ZSE & Audit")
-
-  # --- SPRÁVA A NAHRÁVANIE PDF FAKTÚR PRIAMO V ZÁLOŽKE ---
-  with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
-    uploaded_files = st.file_uploader(
-        "Vyber PDF faktúry zo ZSE na nahranie",
-        type=["pdf"],
-        accept_multiple_files=True,
-        key="pdf_uploader_tab",
-    )
-
-    if uploaded_files:
-      for uploaded_file in uploaded_files:
-        target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
-        if not os.path.exists(target_path):
-          with open(target_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-      st.success("Súbory boli úspešne nahrané.")
-      st.rerun()
-
-    existing_pdfs = (
-        [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
-        if os.path.exists(INVOICE_DIR)
-        else []
-    )
-    if existing_pdfs:
-      st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
-      for pdf_file in existing_pdfs:
-        col_f1, col_f2 = st.columns([5, 1])
-        col_f1.text(pdf_file)
-        if col_f2.button("🗑️ Zmazať", key=f"del_{pdf_file}"):
-          try:
-            os.remove(os.path.join(INVOICE_DIR, pdf_file))
-            st.rerun()
-          except Exception as e:
-            st.error(f"Chyba pri mazaní: {e}")
-    else:
-      st.info(
-          "Zatiaľ nie sú v priečinku `faktury_zse` nahrané žiadne PDF súbory."
-      )
-
-  st.divider()
+  st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
 
   pdf_only_df = pdf_elec_df.copy()
   if not pdf_only_df.empty:
@@ -1534,6 +1493,7 @@ elif selected_tab == TAB_NAMES[3]:
 
     st.divider()
 
+    st.markdown("### 📋 Prehľad jednotlivých faktúr")
     display_cols = [
         c
         for c in df_filtered_inv.columns
@@ -1542,6 +1502,47 @@ elif selected_tab == TAB_NAMES[3]:
     st.dataframe(
         df_filtered_inv[display_cols], use_container_width=True, hide_index=True
     )
+
+    st.divider()
+
+    # --- NAHRÁVANIE A SPRÁVA PDF FAKTÚR (UMIESTNENÉ HNEĎ POD TABUĽKOU) ---
+    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=False):
+      uploaded_files = st.file_uploader(
+          "Vyber PDF faktúry zo ZSE na nahranie",
+          type=["pdf"],
+          accept_multiple_files=True,
+          key="pdf_uploader_tab",
+      )
+
+      if uploaded_files:
+        for uploaded_file in uploaded_files:
+          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+          if not os.path.exists(target_path):
+            with open(target_path, "wb") as f:
+              f.write(uploaded_file.getbuffer())
+        st.success("Súbory boli úspešne nahrané.")
+        st.rerun()
+
+      existing_pdfs = (
+          [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
+          if os.path.exists(INVOICE_DIR)
+          else []
+      )
+      if existing_pdfs:
+        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
+        for pdf_file in existing_pdfs:
+          col_f1, col_f2 = st.columns([5, 1])
+          col_f1.text(pdf_file)
+          if col_f2.button("🗑️ Zmazať", key=f"del_{pdf_file}"):
+            try:
+              os.remove(os.path.join(INVOICE_DIR, pdf_file))
+              st.rerun()
+            except Exception as e:
+              st.error(f"Chyba pri mazaní: {e}")
+      else:
+        st.info(
+            "Zatiaľ nie sú v priečinku `faktury_zse` nahrané žiadne PDF súbory."
+        )
 
     st.divider()
 
@@ -1576,3 +1577,39 @@ elif selected_tab == TAB_NAMES[3]:
         st.text(row["Raw_Text"])
   else:
     st.info("Pre zvolené filtre neboli nájdené žiadne spracované PDF faktúry.")
+    
+    # Pridávame možnost nahrať faktúry aj v prípade, ak žiadne dáta zatiaľ zobrazené nie sú
+    st.divider()
+    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
+      uploaded_files = st.file_uploader(
+          "Vyber PDF faktúry zo ZSE na nahranie",
+          type=["pdf"],
+          accept_multiple_files=True,
+          key="pdf_uploader_tab_empty",
+      )
+
+      if uploaded_files:
+        for uploaded_file in uploaded_files:
+          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+          if not os.path.exists(target_path):
+            with open(target_path, "wb") as f:
+              f.write(uploaded_file.getbuffer())
+        st.success("Súbory boli úspešne nahrané.")
+        st.rerun()
+
+      existing_pdfs = (
+          [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
+          if os.path.exists(INVOICE_DIR)
+          else []
+      )
+      if existing_pdfs:
+        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
+        for pdf_file in existing_pdfs:
+          col_f1, col_f2 = st.columns([5, 1])
+          col_f1.text(pdf_file)
+          if col_f2.button("🗑️ Zmazať", key=f"del_empty_{pdf_file}"):
+            try:
+              os.remove(os.path.join(INVOICE_DIR, pdf_file))
+              st.rerun()
+            except Exception as e:
+              st.error(f"Chyba pri mazaní: {e}")
