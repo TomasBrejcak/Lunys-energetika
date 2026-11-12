@@ -1361,16 +1361,20 @@ elif selected_tab == TAB_NAMES[1]:
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
   if not filtered_elec.empty:
-    # Filtrujeme iba dáta, ktoré majú zdroj z PDF faktúr (hlavné merania: Pebek, Haramia, Nájomcovia, Beňovský, Bratislava)
-    df_pdf_only_plots = filtered_elec[
-        filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)"
-    ]
+    # Definícia podružných meraní na kompletné vynechanie
+    sub_to_exclude = ["Skladová hala I.", "Správa 99", "Bananáreň", "Zemiakareň"]
+
+    # Dáta pre grafy: iba hlavné odberné miesta s PDF faktúrou (bez podružných)
+    df_price_plots = filtered_elec[
+        (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)") &
+        (~filtered_elec["Odberné miesto"].isin(sub_to_exclude))
+    ].copy()
 
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-      if not df_pdf_only_plots.empty:
+      if not df_price_plots.empty:
         fig_price = px.line(
-            df_pdf_only_plots,
+            df_price_plots,
             x="Mesiac",
             y="Cena (€/kWh)",
             color="Odberné miesto",
@@ -1386,8 +1390,8 @@ elif selected_tab == TAB_NAMES[2]:
         st.info("Pre zvolené filtre nie sú k dispozícii dáta z PDF faktúr.")
 
     with col_p2:
-      df_silova_plot = df_pdf_only_plots[
-          df_pdf_only_plots["Cena silovej zložky (€/kWh)"] > 0
+      df_silova_plot = df_price_plots[
+          df_price_plots["Cena silovej zložky (€/kWh)"] > 0
       ]
       if not df_silova_plot.empty:
         fig_silova = px.line(
@@ -1410,8 +1414,15 @@ elif selected_tab == TAB_NAMES[2]:
         )
 
     st.divider()
+    st.markdown("### 📋 Prehľad hlavných odberných miest (bez podružných meraní)")
+
+    # Dáta pre tabuľku pod grafmi: vynechávame Bananáreň, Zemiakareň, Správu 99, Skladovú halu I.
+    df_table_clean = filtered_elec[
+        ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
+    ].copy()
+
     st.dataframe(
-        filtered_elec[[
+        df_table_clean[[
             "Mesiac",
             "Odberné miesto",
             "Spotreba (kWh)",
