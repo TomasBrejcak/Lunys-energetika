@@ -222,16 +222,11 @@ def build_presentation_excel(
           cell.alignment = Alignment(horizontal="right")
         elif "Cena" in col_title:
           kwh_cols = [i + 1 for i, c in enumerate(cols) if "(kWh)" in c]
-          if "silovej" in col_title.lower():
-            eur_cols = [
-                i + 1 for i, c in enumerate(cols) if "Silová zložka (€)" in c
-            ]
-          else:
-            eur_cols = [
-                i + 1
-                for i, c in enumerate(cols)
-                if "Náklady" in c or "Spolu bez DPH" in c
-            ]
+          eur_cols = [
+              i + 1
+              for i, c in enumerate(cols)
+              if "Náklady" in c or "Spolu bez DPH" in c
+          ]
           if kwh_cols and eur_cols:
             k_let = get_column_letter(kwh_cols[0])
             e_let = get_column_letter(eur_cols[0])
@@ -517,13 +512,11 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       if any(kw.lower() in line.lower() for kw in keyword):
         if "technické údaje" in line.lower():
           continue
-        m = re.search(
-            r"([\d\s]+,\d{1,3}|\d{1,3}(?:\s?\d{3})+)\s*kWh", line, re.IGNORECASE
-        )
-        if not m:
-          m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
+        m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
         if m:
-          val_str = m.group(1).replace(" ", "").replace(",", ".")
+          val_str = (
+              m.group(1).split()[0].replace(" ", "").replace(",", ".")
+          )
           try:
             val = float(val_str)
             if val < 10000000:
@@ -1109,7 +1102,6 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-# Očistený KPI dataframe pre správne súčty bez duplicity trafostaníc a podružných meraní
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
@@ -1221,12 +1213,12 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÝ OBSAH DASHBOARDU (OPRAVENÉ: POČÍTANIE Z OČISTENÉHO kpi_df) ---
+# --- HLAVNÝ OBSAH DASHBOARDU ---
 total_elec_kwh = (
-    kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
+    filtered_elec["Spotreba (kWh)"].sum() if not filtered_elec.empty else 0.0
 )
 total_elec_eur = (
-    kpi_df["Náklady (€)"].sum() if not kpi_df.empty else 0.0
+    filtered_elec["Náklady (€)"].sum() if not filtered_elec.empty else 0.0
 )
 avg_price_per_kwh = (
     (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
