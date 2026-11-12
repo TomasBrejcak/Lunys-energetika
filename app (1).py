@@ -565,4 +565,117 @@ elif selected_tab == TAB_NAMES[2]:
                 x=sub_om['Mesiac'],
                 y=sub_om['Cena (€/kWh)'],
                 mode='lines+markers',
-                name
+                name=f"{om} (€/kWh)"
+            ))
+
+        fig_spot_trend.update_layout(
+            title="Mesačný vývoj ceny za 1 kWh (€/kWh)",
+            xaxis_title="Mesiac",
+            yaxis_title="Cena (€/kWh)",
+            template="plotly_dark",
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig_spot_trend, use_container_width=True)
+
+        st.dataframe(filtered_elec[['Mesiac', 'Odberné miesto', 'Spotreba (kWh)', 'Náklady (€)', 'Cena (€/kWh)', 'Zdroj']], use_container_width=True, hide_index=True)
+    else:
+        st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
+
+elif selected_tab == TAB_NAMES[3]:
+    st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
+    
+    # Bezpečné čítanie priamo z parsovaných PDF súborov
+    pdf_only_df = pdf_elec_df.copy()
+    if not pdf_only_df.empty and selected_months:
+        pdf_only_df = pdf_only_df[pdf_only_df['Mesiac'].isin(selected_months)]
+
+    if not pdf_only_df.empty:
+        df_filtered_inv = pdf_only_df.copy()
+        df_filtered_inv = df_filtered_inv.drop_duplicates(subset=['EIC', 'Číslo faktúry (VS)'], keep='first')
+        df_filtered_inv = df_filtered_inv.sort_values(by='_sort_date', ascending=True).reset_index(drop=True)
+        
+        st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
+        st.divider()
+
+        st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií z faktúr")
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            tot_silova = df_filtered_inv['Silová zložka (€)'].sum()
+            tot_distrib = df_filtered_inv['Distribúcia celkom (€)'].sum()
+            sum_cost_total = tot_silova + tot_distrib
+            
+            df_pie_cost = pd.DataFrame({
+                'Zložka': [f"Silová zložka ({tot_silova:,.2f} €)", f"Distribúcia celkom ({tot_distrib:,.2f} €)"],
+                'Suma': [tot_silova, tot_distrib]
+            })
+            
+            fig_pie1 = px.pie(
+                df_pie_cost, names='Zložka', values='Suma', hole=0.4,
+                title="Podiel nákladov: Silová zložka vs. Distribúcia",
+                template="plotly_dark"
+            )
+            fig_pie1.update_traces(textinfo='percent+label', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie1, use_container_width=True)
+            st.markdown(f"**Spolu náklady: {sum_cost_total:,.2f} €**")
+
+        with col_g2:
+            tot_rk = df_filtered_inv['Prekročenie RK (€)'].sum()
+            tot_mrk = df_filtered_inv['Prekročenie MRK (€)'].sum()
+            tot_jalova = df_filtered_inv['Jalová elektrina (€)'].sum()
+            tot_ucinnik = df_filtered_inv['Prirážka za účinník (€)'].sum()
+            sum_penalties_total = tot_rk + tot_mrk + tot_jalova + tot_ucinnik
+            
+            df_pie_penalties = pd.DataFrame({
+                'Typ sankcie': [
+                    f"Prekročenie RK ({tot_rk:,.2f} €)",
+                    f"Prekročenie MRK ({tot_mrk:,.2f} €)", 
+                    f"Jalová elektrina ({tot_jalova:,.2f} €)", 
+                    f"Prirážka za účinník ({tot_ucinnik:,.2f} €)"
+                ],
+                'Suma': [tot_rk, tot_mrk, tot_jalova, tot_ucinnik]
+            })
+            
+            fig_pie2 = px.pie(
+                df_pie_penalties, names='Typ sankcie', values='Suma', hole=0.4,
+                title="Súhrn pokút a sankcií",
+                template="plotly_dark"
+            )
+            fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
+            st.plotly_chart(fig_pie2, use_container_width=True)
+            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
+
+        st.divider()
+
+        st.markdown("### 📋 Prehľadná tabuľka načítaných faktúr")
+        display_cols = [c for c in df_filtered_inv.columns if c not in ["Raw_Text", "_sort_date", "Mesiac", "Raw_Data"]]
+        st.dataframe(df_filtered_inv[display_cols], use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        st.markdown("### 🔎 Detail faktúr podľa mesiacov")
+        for idx, row in df_filtered_inv.iterrows():
+            st.markdown(f"#### Faktúra č. {row['Číslo faktúry (VS)']} – {row['Odberné miesto']} ({row['Fakturačné obdobie']})")
+            
+            c_f1, c_f2, c_f3, c_f4 = st.columns(4)
+            c_f1.metric("Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €")
+            c_f2.metric("Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €")
+            c_f3.metric("Prekročenie RK / MRK", f"{(row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']):,.2f} €", delta_color="inverse" if (row['Prekročenie RK (€)'] + row['Prekročenie MRK (€)']) > 0 else "normal")
+            c_f4.metric("Jalová + Účinník", f"{(row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']):,.2f} €", delta_color="inverse" if (row['Jalová elektrina (€)'] + row['Prirážka za účinník (€)']) > 0 else "normal")
+
+            with st.expander(f"🔍 Diagnostika surového textu z PDF pre faktúru {row['Číslo faktúry (VS)']}"):
+                st.text(row['Raw_Text'])
+
+            st.divider()
+    else:
+        st.info("V priečinku `faktury_zse` zatiaľ nie sú k dispozícii žiadne úspešne načítané PDF faktúry, alebo vybraný mesiac neobsahuje PDF dáta.")
+
+    st.divider()
+    st.markdown("### 📤 Nahranie ďalších PDF faktúr")
+    uploaded_files = st.file_uploader("Pridaj ďalšie PDF faktúry:", type=["pdf"], accept_multiple_files=True, key="uploader_bottom")
+    if uploaded_files:
+        for uploaded_file in uploaded_files:
+            file_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+        st.success(f"Úspešne uložených {len(uploaded_files)} súborov do `{INVOICE_DIR}`. Obnov stránku.")
