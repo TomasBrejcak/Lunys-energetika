@@ -222,17 +222,11 @@ def build_presentation_excel(
           cell.alignment = Alignment(horizontal="right")
         elif "Cena" in col_title:
           kwh_cols = [i + 1 for i, c in enumerate(cols) if "(kWh)" in c]
-          if "silovej" in col_title.lower():
-            eur_cols = [
-                i + 1 for i, c in enumerate(cols) if "Silová zložka (€)" in c
-            ]
-          else:
-            eur_cols = [
-                i + 1
-                for i, c in enumerate(cols)
-                if "Náklady" in c or "Spolu bez DPH" in c
-            ]
-
+          eur_cols = [
+              i + 1
+              for i, c in enumerate(cols)
+              if "Náklady" in c or "Spolu bez DPH" in c
+          ]
           if kwh_cols and eur_cols:
             k_let = get_column_letter(kwh_cols[0])
             e_let = get_column_letter(eur_cols[0])
@@ -518,13 +512,11 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       if any(kw.lower() in line.lower() for kw in keyword):
         if "technické údaje" in line.lower():
           continue
-        m = re.search(
-            r"([\d\s]+,\d{1,3}|\d{1,3}(?:\s?\d{3})+)\s*kWh", line, re.IGNORECASE
-        )
-        if not m:
-          m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
+        m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
         if m:
-          val_str = m.group(1).replace(" ", "").replace(",", ".")
+          val_str = (
+              m.group(1).split()[0].replace(" ", "").replace(",", ".")
+          )
           try:
             val = float(val_str)
             if val < 10000000:
@@ -654,7 +646,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
 
 # --- NAČÍTANIE FVE A EXCEL DÁT ---
 @st.cache_data
-def load_excel_data(file_mtime=None):
+def load_excel_data():
   file_path = "Spotreby energií.xlsx"
   if not os.path.exists(file_path):
     return pd.DataFrame(), pd.DataFrame()
@@ -785,9 +777,7 @@ def load_excel_data(file_mtime=None):
   return fve_df, excel_elec_df
 
 
-excel_path = "Spotreby energií.xlsx"
-excel_mtime = os.path.getmtime(excel_path) if os.path.exists(excel_path) else 0
-fve_df, excel_elec_df = load_excel_data(file_mtime=excel_mtime)
+fve_df, excel_elec_df = load_excel_data()
 
 # Načítanie PDF faktúr pre hlavné miesta
 all_pdf_files = (
@@ -826,13 +816,10 @@ pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
 # Spojenie dát
 if not pdf_elec_df.empty:
-  if not excel_elec_df.empty:
-    elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
-    elec_df = elec_df.drop_duplicates(
-        subset=["Odberné miesto", "Mesiac"], keep="first"
-    )
-  else:
-    elec_df = pdf_elec_df
+  elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
+  elec_df = elec_df.drop_duplicates(
+      subset=["Odberné miesto", "Mesiac"], keep="first"
+  )
 else:
   elec_df = excel_elec_df
 
@@ -1086,20 +1073,18 @@ st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
 
 filtered_fve = (
     fve_df[fve_df["Mesiac"].isin(selected_months)].copy()
-    if not fve_df.empty and selected_months
+    if not fve_df.empty
     else pd.DataFrame()
 )
 rep_elec = (
     elec_df[elec_df["Mesiac"].isin(selected_months)].copy()
-    if not elec_df.empty and selected_months
+    if not elec_df.empty
     else pd.DataFrame()
 )
-if not rep_elec.empty and st.session_state.selected_oms:
+if not rep_elec.empty:
   rep_elec = rep_elec[
       rep_elec["Odberné miesto"].isin(st.session_state.selected_oms)
   ]
-else:
-  rep_elec = pd.DataFrame()
 
 filtered_elec = rep_elec.copy()
 
@@ -1115,7 +1100,6 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-# Bezpečný očistený KPI dataframe bez duplicity trafostaníc a podružných meraní
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
@@ -1128,7 +1112,7 @@ if not kpi_df.empty:
     ]
 
 pdf_filtered_for_export = pd.DataFrame()
-if not pdf_elec_df.empty and selected_months and st.session_state.selected_oms:
+if not pdf_elec_df.empty:
   pdf_filtered_for_export = pdf_elec_df[
       pdf_elec_df["Mesiac"].isin(selected_months)
       & pdf_elec_df["Odberné miesto"].isin(st.session_state.selected_oms)
@@ -1458,14 +1442,10 @@ elif selected_tab == TAB_NAMES[3]:
   if not pdf_only_df.empty:
     if selected_months:
       pdf_only_df = pdf_only_df[pdf_only_df["Mesiac"].isin(selected_months)]
-    else:
-      pdf_only_df = pd.DataFrame()
     if st.session_state.selected_oms:
       pdf_only_df = pdf_only_df[
           pdf_only_df["Odberné miesto"].isin(st.session_state.selected_oms)
       ]
-    else:
-      pdf_only_df = pd.DataFrame()
 
   if not pdf_only_df.empty:
     df_filtered_inv = pdf_only_df.copy()
@@ -1485,7 +1465,7 @@ elif selected_tab == TAB_NAMES[3]:
     with col_g1:
       tot_silova = df_filtered_inv["Silová zložka (€)"].sum()
       tot_distrib = df_filtered_inv["Distribúcia celkom (€)"].sum()
-      sum_cost_total = df_filtered_inv["Spolu bez DPH (€)"].sum()
+      sum_cost_total = tot_silova + tot_distrib
 
       df_pie_cost = pd.DataFrame({
           "Zložka": [
@@ -1499,12 +1479,15 @@ elif selected_tab == TAB_NAMES[3]:
           df_pie_cost,
           names="Zložka",
           values="Suma",
+          hole=0.4,
+          title="Podiel nákladov: Silová zložka vs. Distribúcia",
+          template="plotly_dark",
       )
       fig_pie1.update_traces(
           textinfo="percent+label", textfont=dict(size=13, color="white")
       )
       st.plotly_chart(fig_pie1, use_container_width=True)
-      st.markdown(f"**Spolu fakturované náklady bez DPH: {sum_cost_total:,.2f} €**")
+      st.markdown(f"**Spolu náklady: {sum_cost_total:,.2f} €**")
 
     with col_g2:
       tot_rk = df_filtered_inv["Prekročenie RK (€)"].sum()
@@ -1527,6 +1510,9 @@ elif selected_tab == TAB_NAMES[3]:
           df_pie_penalties,
           names="Typ sankcie",
           values="Suma",
+          hole=0.4,
+          title="Súhrn pokút a sankcií",
+          template="plotly_dark",
       )
       fig_pie2.update_traces(
           textinfo="percent", textfont=dict(size=13, color="white")
