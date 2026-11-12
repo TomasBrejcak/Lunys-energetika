@@ -388,7 +388,7 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# --- PARSER ZSE FAKTÚR (MAPPING PODĽA EIC KÓDU) ---
+# --- PARSER ZSE FAKTÚR ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
@@ -1361,7 +1361,6 @@ elif selected_tab == TAB_NAMES[1]:
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
   if not filtered_elec.empty:
-    # Definícia presných hlavných odberných miest overených cez EIC
     allowed_main_oms = [
         "Trafostanica PEBEK",
         "Trafostanica HARAMIA",
@@ -1370,10 +1369,8 @@ elif selected_tab == TAB_NAMES[2]:
         "Bratislava – Trafo Feld",
     ]
 
-    # Filtrujeme iba 5 hlavných odberných miest, ktoré majú PDF faktúry
     df_price_plots = filtered_elec[
-        (filtered_elec["Odberné miesto"].isin(allowed_main_oms))
-        & (filtered_elec["Zdroj"] == "PDF Faktúra (ZSE)")
+        filtered_elec["Odberné miesto"].isin(allowed_main_oms)
     ].copy()
 
     col_p1, col_p2 = st.columns(2)
@@ -1386,19 +1383,20 @@ elif selected_tab == TAB_NAMES[2]:
             color="Odberné miesto",
             markers=True,
             title=(
-                "Celková jednotková cena (€/kWh) z PDF faktúr (hlavné odberné"
-                " miesta)"
+                "Celková jednotková cena (€/kWh) – Všetkých 5 hlavných miest"
             ),
             template="plotly_dark",
         )
+        fig_price.update_layout(xaxis={"categoryorder": "array", "categoryarray": month_order})
         st.plotly_chart(fig_price, use_container_width=True)
       else:
-        st.info("Pre zvolené filtre nie sú k dispozícii dáta z PDF faktúr.")
+        st.info("Pre zvolené filtre nie sú k dispozícii dáta.")
 
     with col_p2:
-      df_silova_plot = df_price_plots[
-          df_price_plots["Cena silovej zložky (€/kWh)"] > 0
-      ]
+      df_silova_plot = df_price_plots.copy()
+      if "Cena silovej zložky (€/kWh)" in df_silova_plot.columns:
+        df_silova_plot["Cena silovej zložky (€/kWh)"] = df_silova_plot["Cena silovej zložky (€/kWh)"].fillna(0.0)
+
       if not df_silova_plot.empty:
         fig_silova = px.line(
             df_silova_plot,
@@ -1407,17 +1405,14 @@ elif selected_tab == TAB_NAMES[2]:
             color="Odberné miesto",
             markers=True,
             title=(
-                "Čistá cena silovej zložky (€/kWh) z PDF faktúr (hlavné odberné"
-                " miesta)"
+                "Čistá cena silovej zložky (€/kWh) – Všetkých 5 hlavných miest"
             ),
             template="plotly_dark",
         )
+        fig_silova.update_layout(xaxis={"categoryorder": "array", "categoryarray": month_order})
         st.plotly_chart(fig_silova, use_container_width=True)
       else:
-        st.info(
-            "Pre vybrané filtre nie sú k dispozícii dáta silovej zložky z PDF"
-            " faktúr."
-        )
+        st.info("Pre vybrané filtre nie sú k dispozícii dáta silovej zložky.")
 
     st.divider()
     st.markdown(
