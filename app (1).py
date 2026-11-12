@@ -63,7 +63,7 @@ st.sidebar.divider()
 st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown(
     "Interaktívny nástroj pre vyhodnotenie reálnych spotrieb, nákladov (PDF"
-    " faktúry + Excel pre podružné merania) a úspor z FVE."
+    " faktúry + spravodlivo prepočítané podružné merania) a úspor z FVE."
 )
 
 # --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS ---
@@ -378,7 +378,7 @@ def build_presentation_excel(
       heading="DETAILNÝ MESAČNÝ PREHĽAD VŠETKÝCH MERANÍ",
       sub_note=(
           "Kompletný mesačný rozpis všetkých vybraných miest vrátane"
-          " podružných okruhov a silovej zložky."
+          " spravodlivo prepočítaných podružných okruhov."
       ),
       add_sum_row=False,
   )
@@ -844,6 +844,51 @@ if not pdf_elec_df.empty:
 else:
   elec_df = excel_elec_df
 
+# --- DYNAMICKÝ A SPRAVODLIVÝ PREPOČET PODRUŽNÝCH MERANÍ PODĽA NADRADENEJ TRAFOSTANICE ---
+month_order = [
+    "Január",
+    "Február",
+    "Marec",
+    "Apríl",
+    "Máj",
+    "Jún",
+    "Júl",
+    "August",
+    "September",
+    "Október",
+    "November",
+    "December",
+]
+
+parent_mapping = {
+    "Skladová hala I.": "Trafostanica PEBEK",
+    "Správa 99": "Trafostanica PEBEK",
+    "Bananáreň": "Trafostanica HARAMIA",
+    "Zemiakareň": "Trafostanica HARAMIA",
+}
+
+for sub_om, parent_om in parent_mapping.items():
+  for m in month_order:
+    parent_row = elec_df[
+        (elec_df["Odberné miesto"] == parent_om)
+        & (elec_df["Mesiac"] == m)
+        & (elec_df["Zdroj"].str.contains("PDF"))
+    ]
+    if not parent_row.empty:
+      p_kwh = parent_row["Spotreba (kWh)"].values[0]
+      p_eur = parent_row["Náklady (€)"].values[0]
+      if p_kwh > 0:
+        parent_unit_price = p_eur / p_kwh
+        mask = (elec_df["Odberné miesto"] == sub_om) & (elec_df["Mesiac"] == m)
+        if mask.any():
+          sub_kwh = elec_df.loc[mask, "Spotreba (kWh)"].values[0]
+          new_cost = sub_kwh * parent_unit_price
+          elec_df.loc[mask, "Náklady (€)"] = new_cost
+          elec_df.loc[mask, "Cena (€/kWh)"] = parent_unit_price
+          elec_df.loc[mask, "Zdroj"] = (
+              f"Prepočítané podľa {parent_om} (PDF cena)"
+          )
+
 # --- STAV A HIERARCHICKÝ VÝBER ODBERNÝCH MIEST ---
 TAB_NAMES = [
     "📉 Spotreby & Náklady Odberných Miest",
@@ -1036,20 +1081,6 @@ else:
 
 st.sidebar.divider()
 st.sidebar.subheader("🔍 Časové filtre")
-month_order = [
-    "Január",
-    "Február",
-    "Marec",
-    "Apríl",
-    "Máj",
-    "Jún",
-    "Júl",
-    "August",
-    "September",
-    "Október",
-    "November",
-    "December",
-]
 month_to_num = {name: i + 1 for i, name in enumerate(month_order)}
 num_to_month = {v: k for k, v in month_to_num.items()}
 months_in_data = (
@@ -1098,7 +1129,6 @@ else:
 
 filtered_elec = rep_elec.copy()
 
-# --- PREPOJENIE FVE S VYBRANÝMI LOKALITAMI V SIDEBARE / DASHBOARDE ---
 selected_lokality = (
     filtered_elec["Lokalita"].unique().tolist()
     if not filtered_elec.empty
@@ -1195,7 +1225,7 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÉ KPI KARTY (PREPOJENÉ S VÝBEROM) ---
+# --- HLAVNÉ KPI KARTY ---
 total_elec_kwh = (
     kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
 )
@@ -1268,7 +1298,6 @@ if selected_tab == TAB_NAMES[0]:
       )
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
-    # --- DOPLNENÉ SÚHRNNÉ METRIKY SPOLU POD GRAFMI ---
     st.markdown("### 📌 Súhrn pre vybraný filter grafov")
     sc1, sc2, sc3 = st.columns(3)
     sum_chart_kwh = filtered_elec["Spotreba (kWh)"].sum()
@@ -1537,7 +1566,6 @@ elif selected_tab == TAB_NAMES[3]:
 
     st.divider()
 
-    # --- NAHRÁVANIE A SPRÁVA PDF FAKTÚR ---
     with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=False):
       uploaded_files = st.file_uploader(
           "Vyber PDF faktúry zo ZSE na nahranie",
