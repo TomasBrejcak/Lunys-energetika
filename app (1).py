@@ -815,17 +815,14 @@ for f in all_pdf_files:
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
-# --- SPOJENIE DÁT S PREFERENCIOU PDF FAKTÚR (ZABRÁNENIE NULÁM Z EXCELU) ---
+# --- SPOJENIE DÁT S PRÍSNYM VYNECHANÍM EXCELU PRE HLAVNÉ OM, AK EXISTUJE PDF ---
 if not pdf_elec_df.empty:
-  # Zistíme, ktoré kombinácie (Odberné miesto, Mesiac) máme reálne v PDF faktúrach
-  pdf_keys = set(
-      zip(pdf_elec_df["Odberné miesto"], pdf_elec_df["Mesiac"])
-  )
+  # Zistíme, ktoré odberné miesta majú aspoň jednu reálnu PDF faktúru
+  oms_with_pdf = set(pdf_elec_df["Odberné miesto"].unique())
   
-  # Z Excelu vyfiltrujeme preč tie riadky, ktoré už sú pokryté PDF faktúrou
+  # Z Excelu kompletne vymažeme všetky záznamy pre tie odberné miesta, ktoré už ťaháme z PDF faktúr
   if not excel_elec_df.empty:
-    excel_elec_df["_key"] = list(zip(excel_elec_df["Odberné miesto"], excel_elec_df["Mesiac"]))
-    excel_elec_df = excel_elec_df[~excel_elec_df["_key"].isin(pdf_keys)].drop(columns=["_key"])
+    excel_elec_df = excel_elec_df[~excel_elec_df["Odberné miesto"].isin(oms_with_pdf)]
 
   elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
 else:
@@ -1610,6 +1607,7 @@ elif selected_tab == TAB_NAMES[3]:
     st.info("Pre zvolené filtre neboli nájdené žiadne spracované PDF faktúry.")
 
     st.divider()
+    st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True)
     with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
       uploaded_files = st.file_uploader(
           "Vyber PDF faktúry zo ZSE na nahranie",
