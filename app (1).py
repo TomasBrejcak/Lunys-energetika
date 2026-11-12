@@ -84,7 +84,6 @@ def build_presentation_excel(
   wb = openpyxl.Workbook()
   wb.remove(wb.active)
 
-  # Firemná paleta a štýly
   navy_header = PatternFill("solid", fgColor="17365D")
   sub_header = PatternFill("solid", fgColor="1F4E78")
   zebra_fill = PatternFill("solid", fgColor="F5F8FC")
@@ -123,7 +122,6 @@ def build_presentation_excel(
 
     max_cols = max(len(df_table.columns), 5) if not df_table.empty else 5
 
-    # Horný prezentačný banner
     ws["A1"] = f"LUNYS, s.r.o. | {heading}"
     ws["A1"].font = font_title
     ws["A1"].fill = navy_header
@@ -155,7 +153,6 @@ def build_presentation_excel(
     hdr_row = 5
     cols = list(df_table.columns)
 
-    # Hlavička tabuľky
     for c_idx, col_name in enumerate(cols, start=1):
       c = ws.cell(row=hdr_row, column=c_idx, value=col_name)
       c.font = font_tbl_hdr
@@ -165,7 +162,6 @@ def build_presentation_excel(
       )
     ws.row_dimensions[hdr_row].height = 28
 
-    # Riadky s dátami
     for r_offset, row_vals in enumerate(df_table.values):
       r_num = hdr_row + 1 + r_offset
       row_bg = zebra_fill if r_offset % 2 == 1 else None
@@ -199,11 +195,10 @@ def build_presentation_excel(
         elif "Cena" in col_title:
           cell.number_format = "0.0000 €"
           cell.alignment = Alignment(horizontal="right")
-        elif "Podiel" in col_title or "%" in col_title:
-          cell.number_format = "0.0 %"
+        elif any(k in col_title for k in ["Podiel", "%"]):
+          cell.number_format = "0.0%"
           cell.alignment = Alignment(horizontal="right")
 
-    # Súhrnný riadok SPOLU s živými Excel vzorcami
     if add_sum_row and len(df_table) > 0:
       sum_row = hdr_row + len(df_table) + 1
       ws.cell(row=sum_row, column=1, value="SPOLU").font = font_total
@@ -226,7 +221,6 @@ def build_presentation_excel(
           )
           cell.alignment = Alignment(horizontal="right")
         elif "Cena" in col_title:
-          # Vážený priemer ceny ak existuje spotreba a náklady, inak priemer stĺpca
           kwh_cols = [i + 1 for i, c in enumerate(cols) if "(kWh)" in c]
           eur_cols = [
               i + 1
@@ -236,15 +230,16 @@ def build_presentation_excel(
           if kwh_cols and eur_cols:
             k_let = get_column_letter(kwh_cols[0])
             e_let = get_column_letter(eur_cols[0])
-            cell.value = (
-                f"=IFERROR({e_let}{sum_row}/{k_let}{sum_row}, 0)"
-            )
+            cell.value = f"=IFERROR({e_let}{sum_row}/{k_let}{sum_row}, 0)"
           else:
             cell.value = f"=AVERAGE({col_let}{hdr_row+1}:{col_let}{sum_row-1})"
           cell.number_format = "0.0000 €"
           cell.alignment = Alignment(horizontal="right")
+        elif any(k in col_title for k in ["Podiel", "%"]):
+          cell.value = f"=AVERAGE({col_let}{hdr_row+1}:{col_let}{sum_row-1})"
+          cell.number_format = "0.0%"
+          cell.alignment = Alignment(horizontal="right")
 
-    # Filter, ukotvenie priečok a auto-šírka stĺpcov
     ws.freeze_panes = f"A{hdr_row + 1}"
     ws.auto_filter.ref = (
         f"A{hdr_row}:{get_column_letter(len(cols))}{hdr_row + len(df_table)}"
@@ -258,7 +253,7 @@ def build_presentation_excel(
         max_len = max(max_len, len(val_s))
       ws.column_dimensions[col_let].width = min(max(max_len + 4, 14), 36)
 
-  # 1. HÁROK: Manažérsky súhrn (očistený o duplicity podružných meraní pod trafostanicami)
+  # 1. Manažérsky súhrn
   if not df_kpi_clean.empty:
     df_sum_clean = (
         df_kpi_clean.groupby(["Lokalita", "Odberné miesto"], as_index=False)
@@ -290,7 +285,7 @@ def build_presentation_excel(
       add_sum_row=True,
   )
 
-  # 2. HÁROK: Audit PDF faktúr a pokút (deduplikované)
+  # 2. Audit faktúr a pokút
   if not df_invoices.empty:
     inv_clean = df_invoices.drop_duplicates(
         subset=["EIC", "Číslo faktúry (VS)"], keep="first"
@@ -333,7 +328,7 @@ def build_presentation_excel(
       highlight_penalties=True,
   )
 
-  # 3. HÁROK: Mesačný detail všetkých vybraných miest (vrátane podružných meraní)
+  # 3. Mesačný detail
   if not df_detail.empty:
     det_cols = [
         c
@@ -366,7 +361,7 @@ def build_presentation_excel(
       add_sum_row=False,
   )
 
-  # 4. HÁROK: Fotovoltika (FVE)
+  # 4. Výkon FVE (Opravené percentá)
   if not df_fve.empty:
     fve_clean = df_fve.rename(
         columns={
@@ -643,7 +638,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
   }
 
 
-# --- NAČÍTANIE FVE A EXCEL DÁT ---
+# --- NAČÍTANIE FVE A EXCEL DÁT S OPRAVENÝMI PERCENTAMI ---
 @st.cache_data
 def load_excel_data():
   file_path = "Spotreby energií.xlsx"
@@ -670,10 +665,12 @@ def load_excel_data():
   poprad_kwh = df_fve_raw.iloc[1, 2:11].values.astype(float)
   poprad_eur = df_fve_raw.iloc[2, 2:11].values.astype(float)
   poprad_pct = df_fve_raw.iloc[3, 2:11].values.astype(float)
+  poprad_pct = [p if p <= 1.0 else p / 100.0 for p in poprad_pct]
 
   ba_kwh = df_fve_raw.iloc[4, 2:11].values.astype(float)
   ba_eur = df_fve_raw.iloc[5, 2:11].values.astype(float)
   ba_pct = df_fve_raw.iloc[6, 2:11].values.astype(float)
+  ba_pct = [p if p <= 1.0 else p / 100.0 for p in ba_pct]
 
   fve_df = pd.DataFrame({
       "Mesiac": months[:9] * 2,
@@ -695,7 +692,6 @@ def load_excel_data():
     val1 = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
     combined_text = f"{val0} {val1}".strip()
 
-    # Ignorovať nechcené riadky s "nové trafo"
     if (
         "nové trafo" in combined_text.lower()
         or "nove trafo" in combined_text.lower()
@@ -841,7 +837,6 @@ all_possible_oms = (
     else []
 )
 
-# Trafostanica je nadradený elektromer. Podružné merania sú jej detaily.
 OM_GROUPS = {
     "Trafostanica PEBEK": ["Skladová hala I.", "Správa 99"],
     "Trafostanica HARAMIA": ["Bananáreň", "Zemiakareň"],
@@ -1065,7 +1060,9 @@ selected_months = [num_to_month[m] for m in selected_month_nums]
 
 st.sidebar.divider()
 
-# --- PRÍPRAVA DÁT PRE GRAFY, KPI AJ PREZENTAČNÉ REPORTY ---
+# --- MANAŽÉRSKE REPORTY V ĽAVOM PANELI (SIDEBAR) ---
+st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
+
 filtered_fve = (
     fve_df[fve_df["Mesiac"].isin(selected_months)].copy()
     if not fve_df.empty
@@ -1095,7 +1092,6 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-# --- BEZPEČNÝ VÝPOČET KPI SÚHRNOV (ELIMINÁCIA DUPLICITY TRAFA A PODRUŽNÝCH MERANÍ) ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
@@ -1106,9 +1102,6 @@ if not kpi_df.empty:
     kpi_df = kpi_df[
         ~kpi_df["Odberné miesto"].isin(["Bananáreň", "Zemiakareň"])
     ]
-
-# --- MANAŽÉRSKE REPORTY V ĽAVOM PANELI (PREZENTAČNÉ EXCEL EXPORTY) ---
-st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
 
 pdf_filtered_for_export = pd.DataFrame()
 if not pdf_elec_df.empty:
@@ -1139,7 +1132,7 @@ if not filtered_elec.empty:
       use_container_width=True,
   )
 
-# 2. Výber miesta pre individuálny prezentačný Excel audit (nie surové CSV!)
+# 2. Výber miesta pre individuálny prezentačný Excel audit
 if st.session_state.selected_oms and not filtered_elec.empty:
   selected_rep_om = st.sidebar.selectbox(
       "Vyber miesto pre detailný audit:",
