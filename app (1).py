@@ -324,7 +324,7 @@ def load_excel_data():
                         'Spotreba (kWh)': k_val,
                         'Náklady (€)': e_val,
                         'Cena (€/kWh)': (e_val / k_val) if k_val > 0 else 0.0,
-                        'Zdroj': 'Excel (Podružné meranie)'
+                        'Zdroj': 'Excel (Podružné meranie / Plán)'
                     })
                     
     excel_elec_df = pd.DataFrame(records)
@@ -356,76 +356,12 @@ for f in all_pdf_files:
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
-# Spojenie dát
-subordinate_oms = ["Bananáreň", "Zemiakareň", "Správa 99", "Skladová hala I."]
-subordinate_from_excel = excel_elec_df[excel_elec_df['Odberné miesto'].isin(subordinate_oms)] if not excel_elec_df.empty else pd.DataFrame()
-
+# Spojenie dát (všetky reálne a plánované miesta z Excelu + PDF faktúry)
 if not pdf_elec_df.empty:
-    elec_df = pd.concat([pdf_elec_df, subordinate_from_excel], ignore_index=True)
+    elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
+    elec_df = elec_df.drop_duplicates(subset=['Odberné miesto', 'Mesiac'], keep='first')
 else:
     elec_df = excel_elec_df
-
-# --- KONTROLA A SYNCHRONIZÁCIA PODRUŽNÝCH MERANÍ S TRAFAMI ---
-# Aby súčet Skladovej haly I. + Správa 99 presne sedel na Trafostanicu PEBEK (a Bananáreň + Zemiakareň na Haramiu)
-if not elec_df.empty:
-    # 1. PEBEK: Súčet Skladová hala I. + Správa 99 nahradí hodnoty Trafostanice PEBEK, ak chýba PDF faktúra alebo pre presnú zhodu
-    pebek_subs = elec_df[elec_df['Odberné miesto'].isin(["Skladová hala I.", "Správa 99"])]
-    if not pebek_subs.empty:
-        pebek_agg = pebek_subs.groupby(['Mesiac', 'Lokalita']).agg({
-            'Spotreba (kWh)': 'sum',
-            'Náklady (€)': 'sum'
-        }).reset_index()
-        pebek_agg['Odberné miesto'] = 'Trafostanica PEBEK'
-        pebek_agg['Cena (€/kWh)'] = pebek_agg.apply(lambda r: r['Náklady (€)'] / r['Spotreba (kWh)'] if r['Spotreba (kWh)'] > 0 else 0.0, axis=1)
-        pebek_agg['Zdroj'] = 'Agregát (Skladová hala I. + Správa 99)'
-        
-        # Ak Trafostanica PEBEK nemá nahraté PDF, doplníme ju alebo prepíšeme presným súčtom z Excelu
-        for idx, row in pebek_agg.iterrows():
-            mask = (elec_df['Odberné miesto'] == 'Trafostanica PEBEK') & (elec_df['Mesiac'] == row['Mesiac'])
-            if not elec_df[mask].empty and elec_df[mask]['Zdroj'].values[0] != 'PDF Faktúra (ZSE)':
-                elec_df.loc[mask, 'Spotreba (kWh)'] = row['Spotreba (kWh)']
-                elec_df.loc[mask, 'Náklady (€)'] = row['Náklady (€)']
-                elec_df.loc[mask, 'Cena (€/kWh)'] = row['Cena (€/kWh)']
-            elif elec_df[mask].empty:
-                new_row = {
-                    'Mesiac': row['Mesiac'],
-                    'Lokalita': row['Lokalita'],
-                    'Odberné miesto': 'Trafostanica PEBEK',
-                    'Spotreba (kWh)': row['Spotreba (kWh)'],
-                    'Náklady (€)': row['Náklady (€)'],
-                    'Cena (€/kWh)': row['Cena (€/kWh)'],
-                    'Zdroj': 'Agregát (Skladová hala I. + Správa 99)'
-                }
-                elec_df = pd.concat([elec_df, pd.DataFrame([new_row])], ignore_index=True)
-
-    # 2. HARAMIA: Súčet Bananáreň + Zemiakareň nahradí hodnoty Trafostanice HARAMIA pre presnú zhodu
-    haramia_subs = elec_df[elec_df['Odberné miesto'].isin(["Bananáreň", "Zemiakareň"])]
-    if not haramia_subs.empty:
-        haramia_agg = haramia_subs.groupby(['Mesiac', 'Lokalita']).agg({
-            'Spotreba (kWh)': 'sum',
-            'Náklady (€)': 'sum'
-        }).reset_index()
-        haramia_agg['Odberné miesto'] = 'Trafostanica HARAMIA'
-        haramia_agg['Cena (€/kWh)'] = haramia_agg.apply(lambda r: r['Náklady (€)'] / r['Spotreba (kWh)'] if r['Spotreba (kWh)'] > 0 else 0.0, axis=1)
-        haramia_agg['Zdroj'] = 'Agregát (Bananáreň + Zemiakareň)'
-        
-        for idx, row in haramia_agg.iterrows():
-            mask = (elec_df['Odberné miesto'] == 'Trafostanica HARAMIA') & (elec_df['Mesiac'] == row['Mesiac'])
-            if not elec_df[mask].empty and elec_df[mask]['Zdroj'].values[0] != 'PDF Faktúra (ZSE)':
-                elec_df.loc[mask, 'Spotreba (kWh)'] = row['Spotreba (kWh)']
-                elec_df.loc[mask, 'Náklady (€)'] = row['Náklady (€)']
-                elec_df.loc[mask, 'Cena (€/kWh)'] = row['Cena (€/kWh)']
-            elif elec_df[mask].empty:
-                new_row = {
-                    'Mesiac': row['Mesiac'],
-                    'Lokalita': row['Lokalita'],
-                    'Odberné miesto': 'Trafostanica HARAMIA',
-                    'Spotreba (kWh)': row['Spotreba (kWh)'],
-                    'Náklady (€)': row['Náklady (€)'],
-                    'Cena (€/kWh)': row['Cena (€/kWh)'],
-                    'Zdroj': 'Agregát (Bananáreň + Zemiakareň)'
-                }
-                elec_df = pd.concat([elec_df, pd.DataFrame([new_row])], ignore_index=True)
 
 # --- INITIALIZÁCIA STAVU ZÁLOŽIEK ---
 TAB_NAMES = [
@@ -446,7 +382,7 @@ all_possible_oms = sorted(elec_df['Odberné miesto'].unique()) if not elec_df.em
 if 'selected_oms' not in st.session_state:
     st.session_state.selected_oms = all_possible_oms
 
-# --- SIDEBAR: HIERARCHICKÝ EXCEL FILTER ---
+# --- SIDEBAR: VÝBER ODBERNÝCH MIEST ---
 st.sidebar.subheader("🏢 Výber odberných miest")
 
 if all_possible_oms:
@@ -500,7 +436,7 @@ st.sidebar.subheader("🔍 Časové filtre")
 month_order = ['Január', 'Február', 'Marec', 'Apríl', 'Máj', 'Jún', 'Júl', 'August', 'September', 'Október', 'November', 'December']
 available_months = [m for m in month_order if not elec_df.empty and m in elec_df['Mesiac'].unique()]
 if not available_months:
-    available_months = month_order[:9]
+    available_months = month_order
 
 selected_months = st.sidebar.multiselect(
     "📅 Vyber mesiace", 
@@ -699,7 +635,7 @@ elif selected_tab == TAB_NAMES[3]:
             )
             fig_pie2.update_traces(textinfo='percent', textfont=dict(size=13, color='white'))
             st.plotly_chart(fig_pie2, use_container_width=True)
-            st.markdown(f"**Spolu pokuty a sankcií: {sum_penalties_total:,.2f} €**")
+            st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
 
         st.divider()
 
@@ -724,7 +660,7 @@ elif selected_tab == TAB_NAMES[3]:
 
             st.divider()
     else:
-        st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania sa načítavajú z Excelu).")
+        st.info("Pre vybrané odberné miesta nie sú k dispozícii nahraté PDF faktúry (podružné merania a plán sa načítavajú z Excelu).")
 
     st.divider()
     st.markdown("### 📤 Nahranie ďalších PDF faktúr")
