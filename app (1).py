@@ -1103,10 +1103,9 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-# --- KĽÚČOVÉ OHLADENIE: kpi_df AUTOMATICKY VYLUČUJE PODRUŽNÉ MERANIA PRI SÚČTOCH ---
+# --- OČISTENÝ kpi_df PRE HLAVNÉ KPI KARTY (BEZ DUPLICÍT TRAF) ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
-  # Ak sú vybrané hlavné trafostanice, podružné merania pod nimi sa zo sumárov odstránia, aby nedošlo k duplicitnému sčítaniu
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
     kpi_df = kpi_df[
         ~kpi_df["Odberné miesto"].isin(["Skladová hala I.", "Správa 99"])
@@ -1216,7 +1215,7 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÝ OBSAH DASHBOARDU (POUŽÍVA ČISTÝ kpi_df BEZ DUPLICÍT) ---
+# --- HLAVNÝ OBSAH DASHBOARDU (POUŽÍVA ČISTÝ kpi_df) ---
 total_elec_kwh = (
     kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
 )
@@ -1362,17 +1361,32 @@ elif selected_tab == TAB_NAMES[1]:
 elif selected_tab == TAB_NAMES[2]:
   st.subheader("💶 Porovnanie jednotkových cien za 1 kWh")
   if not filtered_elec.empty:
-    fig_price = px.line(
-        filtered_elec,
-        x="Mesiac",
-        y="Cena (€/kWh)",
-        color="Odberné miesto",
-        markers=True,
-        title="Jednotková cena (€/kWh) podľa mesiacov",
-        template="plotly_dark",
-    )
-    st.plotly_chart(fig_price, use_container_width=True)
+    col_p1, col_p2 = st.columns(2)
+    with col_p1:
+      fig_price = px.line(
+          filtered_elec,
+          x="Mesiac",
+          y="Cena (€/kWh)",
+          color="Odberné miesto",
+          markers=True,
+          title="Celková jednotková cena (€/kWh) vrátane distribúcie",
+          template="plotly_dark",
+      )
+      st.plotly_chart(fig_price, use_container_width=True)
 
+    with col_p2:
+      fig_silova = px.line(
+          filtered_elec,
+          x="Mesiac",
+          y="Cena silovej zložky (€/kWh)",
+          color="Odberné miesto",
+          markers=True,
+          title="Čistá cena silovej zložky (€/kWh) z PDF faktúr",
+          template="plotly_dark",
+      )
+      st.plotly_chart(fig_silova, use_container_width=True)
+
+    st.divider()
     st.dataframe(
         filtered_elec[[
             "Mesiac",
@@ -1380,6 +1394,7 @@ elif selected_tab == TAB_NAMES[2]:
             "Spotreba (kWh)",
             "Náklady (€)",
             "Cena (€/kWh)",
+            "Cena silovej zložky (€/kWh)",
             "Zdroj",
         ]],
         use_container_width=True,
