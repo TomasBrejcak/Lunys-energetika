@@ -279,8 +279,9 @@ def build_presentation_excel(
       df_table=df_sum_clean,
       heading=report_title,
       sub_note=(
-          "Konsolidovaný sumár bez duplicity hlavných trafostaníc (PEBEK,"
-          " HARAMIA) a ich podružných meraní."
+          "Konsolidovaný sumár s vylúčením podružných meraní"
+          " (Skladová hala I., Správa 99, Bananáreň, Zemiakareň) pre zamedzenie"
+          " duplicity."
       ),
       add_sum_row=True,
   )
@@ -1102,8 +1103,10 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
+# --- KĽÚČOVÉ OHLADENIE: kpi_df AUTOMATICKY VYLUČUJE PODRUŽNÉ MERANIA PRI SÚČTOCH ---
 kpi_df = filtered_elec.copy()
 if not kpi_df.empty:
+  # Ak sú vybrané hlavné trafostanice, podružné merania pod nimi sa zo sumárov odstránia, aby nedošlo k duplicitnému sčítaniu
   if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
     kpi_df = kpi_df[
         ~kpi_df["Odberné miesto"].isin(["Skladová hala I.", "Správa 99"])
@@ -1213,12 +1216,12 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÝ OBSAH DASHBOARDU ---
+# --- HLAVNÝ OBSAH DASHBOARDU (POUŽÍVA ČISTÝ kpi_df BEZ DUPLICÍT) ---
 total_elec_kwh = (
-    filtered_elec["Spotreba (kWh)"].sum() if not filtered_elec.empty else 0.0
+    kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
 )
 total_elec_eur = (
-    filtered_elec["Náklady (€)"].sum() if not filtered_elec.empty else 0.0
+    kpi_df["Náklady (€)"].sum() if not kpi_df.empty else 0.0
 )
 avg_price_per_kwh = (
     (total_elec_eur / total_elec_kwh) if total_elec_kwh > 0 else 0.0
@@ -1458,7 +1461,7 @@ elif selected_tab == TAB_NAMES[3]:
           template="plotly_dark",
       )
       st.plotly_chart(fig_pie2, use_container_width=True)
-      st.markdown(f"**Spolu pokuty a sankcie: {sum_penalties_total:,.2f} €**")
+      st.markdown(f"**Spolu pokuty a sankcií: {sum_penalties_total:,.2f} €**")
 
     st.divider()
 
