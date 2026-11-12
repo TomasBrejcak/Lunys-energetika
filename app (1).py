@@ -1084,11 +1084,6 @@ st.sidebar.divider()
 # --- MANAŽÉRSKE REPORTY V SIDEBARE ---
 st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
 
-filtered_fve = (
-    fve_df[fve_df["Mesiac"].isin(selected_months)].copy()
-    if not fve_df.empty and selected_months
-    else pd.DataFrame()
-)
 rep_elec = (
     elec_df[elec_df["Mesiac"].isin(selected_months)].copy()
     if not elec_df.empty and selected_months
@@ -1102,6 +1097,21 @@ else:
   rep_elec = pd.DataFrame()
 
 filtered_elec = rep_elec.copy()
+
+# --- PREPOJENIE FVE S VYBRANÝMI LOKALITAMI V SIDEBARE / DASHBOARDE ---
+selected_lokality = (
+    filtered_elec["Lokalita"].unique().tolist()
+    if not filtered_elec.empty
+    else []
+)
+filtered_fve = (
+    fve_df[
+        fve_df["Mesiac"].isin(selected_months)
+        & fve_df["Lokalita_raw"].isin(selected_lokality)
+    ].copy()
+    if not fve_df.empty and selected_months and selected_lokality
+    else pd.DataFrame(columns=fve_df.columns)
+)
 
 if not filtered_fve.empty:
   filtered_fve["Mesiac"] = pd.Categorical(
@@ -1185,7 +1195,7 @@ if st.sidebar.button(
 ):
   pass
 
-# --- HLAVNÉ KPI KARTY ---
+# --- HLAVNÉ KPI KARTY (PREPOJENÉ S VÝBEROM) ---
 total_elec_kwh = (
     kpi_df["Spotreba (kWh)"].sum() if not kpi_df.empty else 0.0
 )
@@ -1257,6 +1267,19 @@ if selected_tab == TAB_NAMES[0]:
           )
       )
       st.plotly_chart(fig_elec_eur, use_container_width=True)
+
+    # --- DOPLNENÉ SÚHRNNÉ METRIKY SPOLU POD GRAFMI ---
+    st.markdown("### 📌 Súhrn pre vybraný filter grafov")
+    sc1, sc2, sc3 = st.columns(3)
+    sum_chart_kwh = filtered_elec["Spotreba (kWh)"].sum()
+    sum_chart_eur = filtered_elec["Náklady (€)"].sum()
+    avg_chart_price = (
+        sum_chart_eur / sum_chart_kwh if sum_chart_kwh > 0 else 0.0
+    )
+
+    sc1.metric("Celková spotreba (Spolu)", f"{sum_chart_kwh:,.0f} kWh")
+    sc2.metric("Celkové náklady (Spolu)", f"{sum_chart_eur:,.2f} €")
+    sc3.metric("Priemerná cena", f"{avg_chart_price:.4f} €/kWh")
 
     st.divider()
     st.dataframe(
