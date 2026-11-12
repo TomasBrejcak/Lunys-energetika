@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import os
 import re
 import pdfplumber
+import io
 
 # Nastavenie stránky
 st.set_page_config(
@@ -391,15 +392,15 @@ all_possible_oms = sorted(elec_df['Odberné miesto'].unique()) if not elec_df.em
 if 'selected_oms' not in st.session_state:
     st.session_state.selected_oms = all_possible_oms
 
-# --- SIDEBAR: VÝBER ODBERNÝCH MIEST ---
+# --- SIDEBAR: VÝBER ODBERNÝCH MIEST & ROBUSTNÉ CHECKBOXY ---
 st.sidebar.subheader("🏢 Výber odberných miest")
 
 if all_possible_oms:
     col_s1, col_s2 = st.sidebar.columns(2)
-    if col_s1.button("Vybrať všetko"):
+    if col_s1.button("Vybrať všetko", key="btn_all"):
         st.session_state.selected_oms = all_possible_oms
         st.rerun()
-    if col_s2.button("Zrušiť všetko"):
+    if col_s2.button("Zrušiť všetko", key="btn_none"):
         st.session_state.selected_oms = []
         st.rerun()
 
@@ -452,8 +453,49 @@ if not available_months:
 selected_months = st.sidebar.multiselect(
     "📅 Vyber mesiace", 
     options=month_order, 
-    default=available_months
+    default=available_months,
+    key="global_month_filter"
 )
+
+st.sidebar.divider()
+
+# --- MANAŽÉRSKE REPORTY V ĽAVOM PANELI (SIDEBAR) ---
+st.sidebar.subheader("📥 Manažérske Reporty & Exporty")
+
+# Filtrovanie dát pre reporty vopred
+rep_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy() if not elec_df.empty else pd.DataFrame()
+if not rep_elec.empty and st.session_state.selected_oms:
+    rep_elec = rep_elec[rep_elec['Odberné miesto'].isin(st.session_state.selected_oms)]
+
+# 1. Excel export celého portfólia
+if not rep_elec.empty:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        rep_elec.to_excel(writer, index=False, sheet_name='Energetický Audit 2026')
+    excel_data = output.getvalue()
+    
+    st.sidebar.download_button(
+        label="📊 Stiahnuť Excel Report (Všetko)",
+        data=excel_data,
+        file_name="LUNYS_Energetika_Report_2026.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
+
+# 2. Výber miesta pre špecifický report
+if st.session_state.selected_oms:
+    selected_rep_om = st.sidebar.selectbox("Vyber miesto pre detailný audit:", options=st.session_state.selected_oms, key="rep_om_select")
+    
+    om_rep_df = rep_elec[rep_elec['Odberné miesto'] == selected_rep_om]
+    if not om_rep_df.empty:
+        om_txt = om_rep_df.to_csv(index=False).encode('utf-8')
+        st.sidebar.download_button(
+            label=f"📄 Stiahnuť report pre: {selected_rep_om}",
+            data=om_txt,
+            file_name=f"Audit_{selected_rep_om.replace(' ', '_')}.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
 
 st.sidebar.divider()
 
@@ -469,10 +511,7 @@ if st.sidebar.button("📄 Analýza PDF Faktúr", use_container_width=True, on_c
 
 # Filtrovanie dát pre grafy a tabuľky
 filtered_fve = fve_df[fve_df['Mesiac'].isin(selected_months)].copy() if not fve_df.empty else pd.DataFrame()
-filtered_elec = elec_df[elec_df['Mesiac'].isin(selected_months)].copy() if not elec_df.empty else pd.DataFrame()
-
-if not filtered_elec.empty and st.session_state.selected_oms:
-    filtered_elec = filtered_elec[filtered_elec['Odberné miesto'].isin(st.session_state.selected_oms)]
+filtered_elec = rep_elec.copy()
 
 if not filtered_fve.empty:
     filtered_fve['Mesiac'] = pd.Categorical(filtered_fve['Mesiac'], categories=month_order, ordered=True)
@@ -535,7 +574,6 @@ if selected_tab == TAB_NAMES[0]:
 elif selected_tab == TAB_NAMES[1]:
     st.subheader("☀️ Výkon a úspory FVE")
     
-    # Pridaný filter lokalít priamo v záložke FVE
     fve_lokalita_filter = st.radio(
         "📍 Vyber lokalitu pre FVE:",
         options=["Všetky lokality", "Poprad", "Bratislava"],
@@ -604,7 +642,6 @@ elif selected_tab == TAB_NAMES[2]:
 elif selected_tab == TAB_NAMES[3]:
     st.subheader("📄 Analýza PDF faktúr zo ZSE & Audit")
     
-    # Prepojenie PDF dát s vybranými odbernými miestami v sidebare a mesiacmi
     pdf_only_df = pdf_elec_df.copy()
     if not pdf_only_df.empty:
         if selected_months:
