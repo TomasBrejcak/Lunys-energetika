@@ -302,6 +302,7 @@ def build_presentation_excel(
             "Fakturačné obdobie",
             "Spotreba (kWh)",
             "Silová zložka (€)",
+            "Cena silovej zložky (€/kWh)",
             "Distribúcia celkom (€)",
             "Prekročenie RK (€)",
             "Prekročenie MRK (€)",
@@ -321,8 +322,8 @@ def build_presentation_excel(
       df_table=inv_clean,
       heading="AUDIT ZSE FAKTÚR A SANKCIÍ 2026",
       sub_note=(
-          "Rozpad fakturovaných položiek. Červeným sú zvýraznené poplatky za"
-          " prekročenie RK/MRK, jalovú elektrinu a účinník."
+          "Rozpad fakturovaných položiek vrátane čistej ceny silovej zložky."
+          " Červeným sú zvýraznené sankčné poplatky."
       ),
       add_sum_row=True,
       highlight_penalties=True,
@@ -339,6 +340,7 @@ def build_presentation_excel(
             "Spotreba (kWh)",
             "Náklady (€)",
             "Cena (€/kWh)",
+            "Cena silovej zložky (€/kWh)",
             "Zdroj",
             "Číslo faktúry (VS)",
             "Fakturačné obdobie",
@@ -355,13 +357,12 @@ def build_presentation_excel(
       heading="DETAILNÝ MESAČNÝ PREHĽAD VŠETKÝCH MERANÍ",
       sub_note=(
           "Kompletný mesačný rozpis všetkých vybraných miest vrátane"
-          " podružných okruhov (Bananáreň, Zemiakareň, Skladová hala, Správa"
-          " 99)."
+          " podružných okruhov a silovej zložky."
       ),
       add_sum_row=False,
   )
 
-  # 4. Výkon FVE (Opravené percentá)
+  # 4. Výkon FVE
   if not df_fve.empty:
     fve_clean = df_fve.rename(
         columns={
@@ -531,6 +532,11 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
         ["1T za elektrinu", "Register-Special", "ČE 1T"]
     )
 
+  # Výpočet čistej ceny silovej zložky za 1 kWh
+  cena_silovej_za_kwh = (
+      (silova_eur / silova_kwh) if silova_kwh > 0 else 0.0
+  )
+
   distribucia_eur = 0.0
   sumar_section = re.search(
       r"(?:Sumár za miesto spotreby|Sumár za faktúru).*?(?=Suma spolu|$)",
@@ -627,6 +633,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       "_sort_date": sort_date_str,
       "Spotreba (kWh)": silova_kwh,
       "Silová zložka (€)": silova_eur,
+      "Cena silovej zložky (€/kWh)": cena_silovej_za_kwh,
       "Distribúcia celkom (€)": distribucia_eur,
       "Prekročenie RK (€)": rk_prekrocenie,
       "Prekročenie MRK (€)": mrk_prekrocenie,
@@ -638,7 +645,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
   }
 
 
-# --- NAČÍTANIE FVE A EXCEL DÁT S OPRAVENÝMI PERCENTAMI ---
+# --- NAČÍTANIE FVE A EXCEL DÁT ---
 @st.cache_data
 def load_excel_data():
   file_path = "Spotreby energií.xlsx"
@@ -763,6 +770,7 @@ def load_excel_data():
               "Spotreba (kWh)": k_val,
               "Náklady (€)": e_val,
               "Cena (€/kWh)": (e_val / k_val) if k_val > 0 else 0.0,
+              "Cena silovej zložky (€/kWh)": 0.0,  # Pre Excel podružné merania nie je oddelená silová zložka v plnom detaile
               "Zdroj": "Excel (Podružné meranie / Plán)",
           })
 
@@ -796,6 +804,7 @@ for f in all_pdf_files:
         "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
         if res["Spotreba (kWh)"] > 0
         else 0.0,
+        "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
         "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
         "Fakturačné obdobie": res["Fakturačné obdobie"],
         "_sort_date": res["_sort_date"],
@@ -1350,27 +1359,44 @@ elif selected_tab == TAB_NAMES[1]:
     st.info("FVE dáta pre zvolenú lokalitu nie sú k dispozícii.")
 
 elif selected_tab == TAB_NAMES[2]:
-  st.subheader("💶 Reálna spotová cena za 1 kWh")
+  st.subheader("💶 Porovnanie: Celková cena vs. Cena silovej zložky za 1 kWh")
   st.markdown(
-      "Porovnanie jednotkových cien za 1 kWh pre zvolené odberné miesta."
+      "Porovnanie priemernej celkovej ceny (vrátane distribúcie a pokút) a"
+      " čistej ceny silovej zložky za 1 kWh pre hlavné miesta z PDF faktúr."
   )
 
   if not filtered_elec.empty:
+    # Graf pre celkovú cenu vs silovú zložku
     fig_spot_trend = go.Figure()
 
     for om in filtered_elec["Odberné miesto"].unique():
       sub_om = filtered_elec[filtered_elec["Odberné miesto"] == om]
+      # Celková cena
       fig_spot_trend.add_trace(
           go.Scatter(
               x=sub_om["Mesiac"],
               y=sub_om["Cena (€/kWh)"],
               mode="lines+markers",
-              name=f"{om} (€/kWh)",
+              name=f"{om} – Celková (€/kWh)",
           )
       )
+      # Silová zložka (iba ak má nenulové hodnoty)
+      if (
+          "Cena silovej zložky (€/kWh)" in sub_om.columns
+          and sub_om["Cena silovej zložky (€/kWh)"].sum() > 0
+      ):
+        fig_spot_trend.add_trace(
+            go.Scatter(
+                x=sub_om["Mesiac"],
+                y=sub_om["Cena silovej zložky (€/kWh)"],
+                mode="lines+markers",
+                line=dict(dash="dash"),
+                name=f"{om} – Čistá sila (€/kWh)",
+            )
+        )
 
     fig_spot_trend.update_layout(
-        title="Mesačný vývoj ceny za 1 kWh (€/kWh)",
+        title="Mesačný vývoj jednotkových cien (€/kWh)",
         xaxis_title="Mesiac",
         yaxis_title="Cena (€/kWh)",
         template="plotly_dark",
@@ -1378,17 +1404,22 @@ elif selected_tab == TAB_NAMES[2]:
     )
     st.plotly_chart(fig_spot_trend, use_container_width=True)
 
-    st.dataframe(
-        filtered_elec[[
+    st.markdown("### 📋 Podrobný prehľad cien za kWh")
+    cols_to_show = [
+        c
+        for c in [
             "Mesiac",
             "Odberné miesto",
             "Spotreba (kWh)",
             "Náklady (€)",
             "Cena (€/kWh)",
+            "Cena silovej zložky (€/kWh)",
             "Zdroj",
-        ]],
-        use_container_width=True,
-        hide_index=True,
+        ]
+        if c in filtered_elec.columns
+    ]
+    st.dataframe(
+        filtered_elec[cols_to_show], use_container_width=True, hide_index=True
     )
   else:
     st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
@@ -1501,7 +1532,8 @@ elif selected_tab == TAB_NAMES[3]:
 
       c_f1, c_f2, c_f3, c_f4 = st.columns(4)
       c_f1.metric(
-          "Silová zložka (Komodita)", f"{row['Silová zložka (€)']:,.2f} €"
+          "Cena silovej zložky",
+          f"{row['Cena silovej zložky (€/kWh)']:,.4f} €/kWh",
       )
       c_f2.metric(
           "Distribúcia celkom", f"{row['Distribúcia celkom (€)']:,.2f} €"
