@@ -408,14 +408,17 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# --- PARSER ZSE FAKTÚR ---
+# --- PARSER ZSE FAKTÚR S OCHRANOU PROTI CHYBÁM ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
     return None
 
-  with pdfplumber.open(pdf_path) as pdf:
-    text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+  try:
+    with pdfplumber.open(pdf_path) as pdf:
+      text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+  except Exception as e:
+    return None
 
   eic_match = re.search(r"(24Z[A-Z0-9]{13})", text)
   eic_code = eic_match.group(1) if eic_match else None
@@ -800,7 +803,7 @@ def load_excel_data():
 
 fve_df, excel_elec_df = load_excel_data()
 
-# Načítanie PDF faktúr pre hlavné miesta
+# Načítanie PDF faktúr pre hlavné miesta s bezpečným ošetrením
 all_pdf_files = (
     [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
     if (os.path.exists(INVOICE_DIR) and os.path.isdir(INVOICE_DIR))
@@ -809,29 +812,32 @@ all_pdf_files = (
 parsed_invoice_records = []
 for f in all_pdf_files:
   f_path = os.path.join(INVOICE_DIR, f)
-  res = parse_zse_pdf(f_path, os.path.getmtime(f_path))
-  if (
-      res
-      and res["Odberné miesto"]
-      and "neznáme" not in res["Odberné miesto"].lower()
-  ):
-    parsed_invoice_records.append({
-        "Mesiac": res["Mesiac"],
-        "Lokalita": res["Lokalita"],
-        "Odberné miesto": res["Odberné miesto"],
-        "Spotreba (kWh)": res["Spotreba (kWh)"],
-        "Náklady (€)": res["Spolu bez DPH (€)"],
-        "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
-        if res["Spotreba (kWh)"] > 0
-        else 0.0,
-        "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
-        "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
-        "Fakturačné obdobie": res["Fakturačné obdobie"],
-        "_sort_date": res["_sort_date"],
-        "Raw_Text": res["Raw_Text"],
-        "Zdroj": "PDF Faktúra (ZSE)",
-        **res,
-    })
+  try:
+    res = parse_zse_pdf(f_path, os.path.getmtime(f_path))
+    if (
+        res
+        and res["Odberné miesto"]
+        and "neznáme" not in res["Odberné miesto"].lower()
+    ):
+      parsed_invoice_records.append({
+          "Mesiac": res["Mesiac"],
+          "Lokalita": res["Lokalita"],
+          "Odberné miesto": res["Odberné miesto"],
+          "Spotreba (kWh)": res["Spotreba (kWh)"],
+          "Náklady (€)": res["Spolu bez DPH (€)"],
+          "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
+          if res["Spotreba (kWh)"] > 0
+          else 0.0,
+          "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
+          "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
+          "Fakturačné obdobie": res["Fakturačné obdobie"],
+          "_sort_date": res["_sort_date"],
+          "Raw_Text": res["Raw_Text"],
+          "Zdroj": "PDF Faktúra (ZSE)",
+          **res,
+      })
+  except Exception as e:
+    continue
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 
