@@ -43,10 +43,33 @@ INVOICE_DIR = "faktury_zse"
 if os.path.exists(INVOICE_DIR) and not os.path.isdir(INVOICE_DIR):
   try:
     os.remove(INVOICE_DIR)
-  except:
+  except Exception:
     pass
 if not os.path.exists(INVOICE_DIR):
   os.makedirs(INVOICE_DIR)
+
+
+# --- BEZPEČNÝ NÁZOV SÚBORU (OCHRANA PROTI PATH TRAVERSAL) ---
+def safe_pdf_filename(uploaded_name):
+  """Vráti bezpečný názov PDF súboru alebo None, ak je neplatný.
+
+  - odstráni akékoľvek ../ a oddeľovače ciest
+  - vynúti .pdf príponu
+  - overí, že cieľ zostane v INVOICE_DIR
+  """
+  if not uploaded_name:
+    return None
+  # basename odstráni ../, ..\\, / aj \\
+  safe_name = os.path.basename(str(uploaded_name).replace("\\\\", "/"))
+  if not safe_name.lower().endswith(".pdf"):
+    return None
+  target = os.path.join(INVOICE_DIR, safe_name)
+  target_abs = os.path.abspath(target)
+  dir_abs = os.path.abspath(INVOICE_DIR)
+  if not target_abs.startswith(dir_abs + os.sep):
+    return None
+  return target_abs
+
 
 # --- LOGO V SIDEBARE ---
 if os.path.exists("logo.svg"):
@@ -92,8 +115,10 @@ EIC_MAP = {
 
 # --- FUNKCIA NA DEDUPLIKÁCIU PDF FAKTÚR ---
 def deduplicate_pdf_invoices(df):
-  if df is None or df.empty:
-    return pd.DataFrame() if df is None else df.copy()
+  if df is None:
+    return pd.DataFrame()
+  if df.empty or "Číslo faktúry (VS)" not in df.columns:
+    return df.copy()
   work = df.copy()
   has_vs = (
       work["Číslo faktúry (VS)"].notna()
@@ -549,7 +574,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
             val = float(val_str)
             if 0 <= val < 1000000:
               return val
-          except:
+          except Exception:
             pass
     return 0.0
 
@@ -568,7 +593,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
               val = float(val_str)
               if 0 <= val < 1000000:
                 return val
-            except:
+            except Exception:
               pass
       matches = [
           m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)
@@ -584,7 +609,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
             val = float(val_str)
             if 0 <= val < 1000000:
               return val
-          except:
+          except Exception:
             pass
     return 0.0
 
@@ -645,7 +670,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
         distribucia_eur = float(
             distrib_match.group(1).replace(" ", "").replace(",", ".")
         )
-      except:
+      except Exception:
         pass
 
   if distribucia_eur == 0.0:
@@ -665,7 +690,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
           distribucia_eur = float(
               match_sum.group(1).replace(" ", "").replace(",", ".")
           )
-        except:
+        except Exception:
           pass
 
   rk_prekrocenie = get_penalty_cost([
@@ -708,7 +733,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       val = float(rekap_match.group(1).replace(" ", "").replace(",", "."))
       if 0 < val < 1000000:
         spolu_bez_dph = val
-    except:
+    except Exception:
       pass
 
   if spolu_bez_dph == 0.0:
@@ -1761,11 +1786,14 @@ elif selected_tab == TAB_NAMES[3]:
 
       if uploaded_files:
         for uploaded_file in uploaded_files:
-          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+          target_path = safe_pdf_filename(uploaded_file.name)
+          if target_path is None:
+            st.error(f"Neplatný súbor (odmietnutý): {uploaded_file.name}")
+            continue
           if not os.path.exists(target_path):
             with open(target_path, "wb") as f:
               f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahrané.")
+        st.success("Súbory boli úspešne nahraté.")
         st.rerun()
 
       existing_pdfs = (
@@ -1834,11 +1862,14 @@ elif selected_tab == TAB_NAMES[3]:
 
       if uploaded_files:
         for uploaded_file in uploaded_files:
-          target_path = os.path.join(INVOICE_DIR, uploaded_file.name)
+          target_path = safe_pdf_filename(uploaded_file.name)
+          if target_path is None:
+            st.error(f"Neplatný súbor (odmietnutý): {uploaded_file.name}")
+            continue
           if not os.path.exists(target_path):
             with open(target_path, "wb") as f:
               f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahrané.")
+        st.success("Súbory boli úspešne nahraté.")
         st.rerun()
 
       existing_pdfs = (
