@@ -408,7 +408,7 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# --- PARSER ZSE FAKTÚR S OCHRANOU PROTI CHYBÁM ---
+# --- PARSER ZSE FAKTÚR S OCHRANOM PROTI CHYBÁM ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
@@ -1304,10 +1304,25 @@ if selected_tab == TAB_NAMES[0]:
       )
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
-    st.markdown("### 📌 Súhrn pre vybraný filter grafov")
+    # --- OPRAVA: Očistenie súčtov pod grafmi od duplicitných podružných meraní ---
+    chart_summary_df = filtered_elec.copy()
+    if "Trafostanica PEBEK" in chart_summary_df["Odberné miesto"].values:
+      chart_summary_df = chart_summary_df[
+          ~chart_summary_df["Odberné miesto"].isin(
+              ["Skladová hala I.", "Správa 99"]
+          )
+      ]
+    if "Trafostanica HARAMIA" in chart_summary_df["Odberné miesto"].values:
+      chart_summary_df = chart_summary_df[
+          ~chart_summary_df["Odberné miesto"].isin(
+              ["Bananáreň", "Zemiakareň"]
+          )
+      ]
+
+    st.markdown("### 📌 Súhrn pre vybraný filter grafov (bez duplicity)")
     sc1, sc2, sc3 = st.columns(3)
-    sum_chart_kwh = filtered_elec["Spotreba (kWh)"].sum()
-    sum_chart_eur = filtered_elec["Náklady (€)"].sum()
+    sum_chart_kwh = chart_summary_df["Spotreba (kWh)"].sum()
+    sum_chart_eur = chart_summary_df["Náklady (€)"].sum()
     avg_chart_price = (
         sum_chart_eur / sum_chart_kwh if sum_chart_kwh > 0 else 0.0
     )
