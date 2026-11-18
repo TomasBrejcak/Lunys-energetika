@@ -90,6 +90,44 @@ EIC_MAP = {
 }
 
 
+# --- FUNKCIA NA DEDUPLIKÁCIU PDF FAKTÚR ---
+def deduplicate_pdf_invoices(df):
+  if df is None or df.empty:
+    return pd.DataFrame() if df is None else df.copy()
+  work = df.copy()
+  has_vs = (
+      work["Číslo faktúry (VS)"].notna()
+      & work["Číslo faktúry (VS)"].astype(str).str.strip().ne("")
+      & work["Číslo faktúry (VS)"].astype(str).str.lower().ne("neuvedené")
+  )
+  work["_dedup_key"] = ""
+  work.loc[has_vs, "_dedup_key"] = (
+      work.loc[has_vs, "EIC"].astype(str)
+      + "|VS|"
+      + work.loc[has_vs, "Číslo faktúry (VS)"].astype(str)
+  )
+  no_vs = ~has_vs
+  if no_vs.any():
+    work.loc[no_vs, "_dedup_key"] = (
+        work.loc[no_vs, "EIC"].astype(str)
+        + "|NO_VS|"
+        + work.loc[no_vs, "Fakturačné obdobie"].astype(str)
+        + "|"
+        + pd.to_numeric(work.loc[no_vs, "Spotreba (kWh)"], errors="coerce")
+        .fillna(0)
+        .round(3)
+        .astype(str)
+        + "|"
+        + pd.to_numeric(work.loc[no_vs, "Náklady (€)"], errors="coerce")
+        .fillna(0)
+        .round(2)
+        .astype(str)
+    )
+  return work.drop_duplicates(subset=["_dedup_key"], keep="first").drop(
+      columns=["_dedup_key"]
+  )
+
+
 # --- FUNKCIA NA GENEROVANIE PREZENTAČNÉHO EXCEL REPORTU ---
 def build_presentation_excel(
     df_detail,
@@ -256,7 +294,21 @@ def build_presentation_excel(
           cell.number_format = "0.0000 €"
           cell.alignment = Alignment(horizontal="right")
         elif any(k in col_title for k in ["Podiel", "%"]):
-          cell.value = f"=AVERAGE({col_let}{hdr_row+1}:{col_let}{sum_row-1})"
+          if (
+              col_title == "Podiel pokrytia (%)"
+              and "Výroba FVE (kWh)" in cols
+              and "Spotreba lokality (odvodená kWh)" in cols
+          ):
+            gen_col = get_column_letter(cols.index("Výroba FVE (kWh)") + 1)
+            consumption_col = get_column_letter(
+                cols.index("Spotreba lokality (odvodená kWh)") + 1
+            )
+            cell.value = (
+                f"=IFERROR(SUM({gen_col}{hdr_row+1}:{gen_col}{sum_row-1})/"
+                f"SUM({consumption_col}{hdr_row+1}:{consumption_col}{sum_row-1}),0)"
+            )
+          else:
+            cell.value = f"=AVERAGE({col_let}{hdr_row+1}:{col_let}{sum_row-1})"
           cell.number_format = "0.0%"
           cell.alignment = Alignment(horizontal="right")
 
@@ -308,9 +360,7 @@ def build_presentation_excel(
 
   # 2. Audit faktúr a pokút
   if not df_invoices.empty:
-    inv_clean = df_invoices.drop_duplicates(
-        subset=["EIC", "Číslo faktúry (VS)"], keep="first"
-    ).copy()
+    inv_clean = deduplicate_pdf_invoices(df_invoices).copy()
     if "_sort_date" in inv_clean.columns:
       inv_clean = inv_clean.sort_values("_sort_date")
     inv_cols = [
@@ -393,6 +443,15 @@ def build_presentation_excel(
             "Podiel_Pokrytia_Pct": "Podiel pokrytia (%)",
         }
     ).copy()
+    fve_clean["Spotreba lokality (odvodená kWh)"] = fve_clean.apply(
+        lambda r: (
+            r["Výroba FVE (kWh)"] / r["Podiel pokrytia (%)"]
+            if pd.notna(r["Podiel pokrytia (%)"])
+            and r["Podiel pokrytia (%)"] > 0
+            else 0.0
+        ),
+        axis=1,
+    )
     populate_formatted_sheet(
         sheet_name="4. Výkon FVE",
         df_table=fve_clean,
@@ -408,7 +467,7 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# --- PARSER ZSE FAKTÚR S OCHRANOM PROTI CHYBÁM ---
+# --- PARSER ZSE FAKTÚR S OCHRANOU PROTI CHYBÁM ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
@@ -417,7 +476,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
   try:
     with pdfplumber.open(pdf_path) as pdf:
       text = "\n".join([page.extract_text() or "" for page in pdf.pages])
-  except Exception as e:
+  except Exception:
     return None
 
   eic_match = re.search(r"(24Z[A-Z0-9]{13})", text)
@@ -529,6 +588,18 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
             pass
     return 0.0
 
+  def parse_local_number(raw_value):
+    """Prevod slovenského zápisu čísla (napr. 12 345,678) na float."""
+    value = str(raw_value).replace("\u00a0", " ").strip()
+    value = re.sub(r"\s+", "", value)
+    if not value:
+      return 0.0
+    if "," in value:
+      value = value.replace(".", "").replace(",", ".")
+    elif value.count(".") > 1:
+      value = value.replace(".", "")
+    return float(value)
+
   def get_line_kwh(keyword):
     if isinstance(keyword, str):
       keyword = [keyword]
@@ -536,16 +607,13 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       if any(kw.lower() in line.lower() for kw in keyword):
         if "technické údaje" in line.lower():
           continue
-        m = re.search(r"([\d\s,]+)\s*kWh", line, re.IGNORECASE)
+        m = re.search(r"([0-9][0-9\s.,]*)\s*kWh", line, re.IGNORECASE)
         if m:
-          val_str = (
-              m.group(1).split()[0].replace(" ", "").replace(",", ".")
-          )
           try:
-            val = float(val_str)
-            if val < 10000000:
+            val = parse_local_number(m.group(1))
+            if 0 <= val < 10000000:
               return val
-          except:
+          except (TypeError, ValueError):
             pass
     return 0.0
 
@@ -670,10 +738,27 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
 
 # --- NAČÍTANIE FVE A EXCEL DÁT ---
 @st.cache_data
-def load_excel_data():
+def load_excel_data(file_mtime=None):
   file_path = "Spotreby energií.xlsx"
+  empty_fve = pd.DataFrame(columns=[
+      "Mesiac",
+      "Lokalita_raw",
+      "Vyroba_kWh",
+      "Uspora_EUR",
+      "Podiel_Pokrytia_Pct",
+  ])
+  empty_elec = pd.DataFrame(columns=[
+      "Mesiac",
+      "Lokalita",
+      "Odberné miesto",
+      "Spotreba (kWh)",
+      "Náklady (€)",
+      "Cena (€/kWh)",
+      "Cena silovej zložky (€/kWh)",
+      "Zdroj",
+  ])
   if not os.path.exists(file_path):
-    return pd.DataFrame(), pd.DataFrame()
+    return empty_fve, empty_elec
 
   xls = pd.ExcelFile(file_path)
   months = [
@@ -692,22 +777,31 @@ def load_excel_data():
   ]
 
   df_fve_raw = pd.read_excel(xls, sheet_name="Prehľad po FVE.2026")
-  poprad_kwh = df_fve_raw.iloc[1, 2:11].values.astype(float)
-  poprad_eur = df_fve_raw.iloc[2, 2:11].values.astype(float)
-  poprad_pct = df_fve_raw.iloc[3, 2:11].values.astype(float)
-  poprad_pct = [p if p <= 1.0 else p / 100.0 for p in poprad_pct]
 
-  ba_kwh = df_fve_raw.iloc[4, 2:11].values.astype(float)
-  ba_eur = df_fve_raw.iloc[5, 2:11].values.astype(float)
-  ba_pct = df_fve_raw.iloc[6, 2:11].values.astype(float)
-  ba_pct = [p if p <= 1.0 else p / 100.0 for p in ba_pct]
+  def fve_row_values(row_index):
+    if row_index >= len(df_fve_raw):
+      return [0.0] * 12
+    vals = pd.to_numeric(
+        df_fve_raw.iloc[row_index, 2:14], errors="coerce"
+    ).tolist()
+    vals = [float(v) if pd.notna(v) else 0.0 for v in vals]
+    return (vals + [0.0] * 12)[:12]
+
+  poprad_kwh, poprad_eur, poprad_pct = (fve_row_values(i) for i in (1, 2, 3))
+  ba_kwh, ba_eur, ba_pct = (fve_row_values(i) for i in (4, 5, 6))
+
+  def normalize_percent(values):
+    return [p if abs(p) <= 1.0 else p / 100.0 for p in values]
+
+  poprad_pct = normalize_percent(poprad_pct)
+  ba_pct = normalize_percent(ba_pct)
 
   fve_df = pd.DataFrame({
-      "Mesiac": months[:9] * 2,
-      "Lokalita_raw": ["Poprad"] * 9 + ["Bratislava"] * 9,
-      "Vyroba_kWh": list(poprad_kwh) + list(ba_kwh),
-      "Uspora_EUR": list(poprad_eur) + list(ba_eur),
-      "Podiel_Pokrytia_Pct": list(poprad_pct) + list(ba_pct),
+      "Mesiac": months * 2,
+      "Lokalita_raw": ["Poprad"] * 12 + ["Bratislava"] * 12,
+      "Vyroba_kWh": poprad_kwh + ba_kwh,
+      "Uspora_EUR": poprad_eur + ba_eur,
+      "Podiel_Pokrytia_Pct": poprad_pct + ba_pct,
   })
 
   df_elec_raw = pd.read_excel(
@@ -801,7 +895,11 @@ def load_excel_data():
   return fve_df, excel_elec_df
 
 
-fve_df, excel_elec_df = load_excel_data()
+excel_path = "Spotreby energií.xlsx"
+excel_mtime = (
+    os.path.getmtime(excel_path) if os.path.exists(excel_path) else None
+)
+fve_df, excel_elec_df = load_excel_data(excel_mtime)
 
 # Načítanie PDF faktúr pre hlavné miesta s bezpečným ošetrením
 all_pdf_files = (
@@ -836,19 +934,35 @@ for f in all_pdf_files:
           "Zdroj": "PDF Faktúra (ZSE)",
           **res,
       })
-  except Exception as e:
+  except Exception:
     continue
 
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
+pdf_elec_df = deduplicate_pdf_invoices(pdf_elec_df)
 
-# --- SPOJENIE DÁT S PRÍSNYM VYNECHANÍM EXCELU PRE HLAVNÉ OM, AK EXISTUJE PDF ---
+# PDF nahrádza Excel len pre konkrétne odberné miesto a mesiac
 if not pdf_elec_df.empty:
-  oms_with_pdf = set(pdf_elec_df["Odberné miesto"].unique())
+  pdf_month_keys = set(
+      zip(
+          pdf_elec_df["Odberné miesto"].astype(str),
+          pdf_elec_df["Mesiac"].astype(str),
+      )
+  )
   if not excel_elec_df.empty:
-    excel_elec_df = excel_elec_df[~excel_elec_df["Odberné miesto"].isin(oms_with_pdf)]
-  elec_df = pd.concat([pdf_elec_df, excel_elec_df], ignore_index=True)
+    excel_keys = list(
+        zip(
+            excel_elec_df["Odberné miesto"].astype(str),
+            excel_elec_df["Mesiac"].astype(str),
+        )
+    )
+    excel_elec_df = excel_elec_df.loc[
+        [key not in pdf_month_keys for key in excel_keys]
+    ].copy()
+  elec_df = pd.concat(
+      [pdf_elec_df, excel_elec_df], ignore_index=True, sort=False
+  )
 else:
-  elec_df = excel_elec_df
+  elec_df = excel_elec_df.copy()
 
 # --- DYNAMICKÝ A SPRAVODLIVÝ PREPOČET PODRUŽNÝCH MERANÍ PODĽA NADRADENEJ TRAFOSTANICE ---
 month_order = [
@@ -875,25 +989,66 @@ parent_mapping = {
 
 for sub_om, parent_om in parent_mapping.items():
   for m in month_order:
-    parent_row = elec_df[
+    if elec_df.empty:
+      continue
+    parent_mask = (
         (elec_df["Odberné miesto"] == parent_om)
         & (elec_df["Mesiac"] == m)
-        & (elec_df["Zdroj"].str.contains("PDF"))
-    ]
-    if not parent_row.empty:
-      p_kwh = parent_row["Spotreba (kWh)"].values[0]
-      p_eur = parent_row["Náklady (€)"].values[0]
+        & elec_df["Zdroj"].astype(str).str.contains("PDF", na=False)
+    )
+    parent_rows = deduplicate_pdf_invoices(elec_df.loc[parent_mask])
+    if not parent_rows.empty:
+      p_kwh = (
+          pd.to_numeric(parent_rows["Spotreba (kWh)"], errors="coerce")
+          .fillna(0)
+          .sum()
+      )
+      p_eur = (
+          pd.to_numeric(parent_rows["Náklady (€)"], errors="coerce")
+          .fillna(0)
+          .sum()
+      )
       if p_kwh > 0:
         parent_unit_price = p_eur / p_kwh
         mask = (elec_df["Odberné miesto"] == sub_om) & (elec_df["Mesiac"] == m)
         if mask.any():
-          sub_kwh = elec_df.loc[mask, "Spotreba (kWh)"].values[0]
-          new_cost = sub_kwh * parent_unit_price
-          elec_df.loc[mask, "Náklady (€)"] = new_cost
+          sub_kwh = pd.to_numeric(
+              elec_df.loc[mask, "Spotreba (kWh)"], errors="coerce"
+          ).fillna(0)
+          elec_df.loc[mask, "Náklady (€)"] = sub_kwh * parent_unit_price
           elec_df.loc[mask, "Cena (€/kWh)"] = parent_unit_price
           elec_df.loc[mask, "Zdroj"] = (
               f"Prepočítané podľa {parent_om} (PDF cena)"
           )
+
+
+def weighted_fve_coverage(df):
+  """Vážené pokrytie = súčet výroby / súčet odvodenej spotreby lokality."""
+  if df is None or df.empty:
+    return 0.0
+  valid = df.copy()
+  valid["Vyroba_kWh"] = pd.to_numeric(valid["Vyroba_kWh"], errors="coerce")
+  valid["Podiel_Pokrytia_Pct"] = pd.to_numeric(
+      valid["Podiel_Pokrytia_Pct"], errors="coerce"
+  )
+  valid = valid[
+      valid["Vyroba_kWh"].notna()
+      & (valid["Vyroba_kWh"] >= 0)
+      & valid["Podiel_Pokrytia_Pct"].notna()
+      & (valid["Podiel_Pokrytia_Pct"] > 0)
+  ]
+  if valid.empty:
+    return 0.0
+  inferred_consumption = (
+      valid["Vyroba_kWh"] / valid["Podiel_Pokrytia_Pct"]
+  ).sum()
+  total_generation = valid["Vyroba_kWh"].sum()
+  return (
+      float(total_generation / inferred_consumption)
+      if inferred_consumption > 0
+      else 0.0
+  )
+
 
 # --- STAV A HIERARCHICKÝ VÝBER ODBERNÝCH MIEST ---
 TAB_NAMES = [
@@ -1304,7 +1459,7 @@ if selected_tab == TAB_NAMES[0]:
       )
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
-    # --- OPRAVA: Očistenie súčtov pod grafmi od duplicitných podružných meraní ---
+    # --- Očistenie súčtov pod grafmi od duplicitných podružných meraní ---
     chart_summary_df = filtered_elec.copy()
     if "Trafostanica PEBEK" in chart_summary_df["Odberné miesto"].values:
       chart_summary_df = chart_summary_df[
@@ -1364,12 +1519,23 @@ elif selected_tab == TAB_NAMES[1]:
   if not tab_fve_df.empty:
     summary_fve = (
         tab_fve_df.groupby("Lokalita_raw")
-        .agg({
-            "Vyroba_kWh": "sum",
-            "Uspora_EUR": "sum",
-            "Podiel_Pokrytia_Pct": "mean",
-        })
+        .agg({"Vyroba_kWh": "sum", "Uspora_EUR": "sum"})
         .reset_index()
+    )
+    weighted_by_location = {
+        loc: weighted_fve_coverage(group)
+        for loc, group in tab_fve_df.groupby("Lokalita_raw")
+    }
+    summary_fve["Podiel_Pokrytia_Pct"] = (
+        summary_fve["Lokalita_raw"].map(weighted_by_location).fillna(0.0)
+    )
+    st.metric(
+        "Vážené pokrytie spotreby FVE",
+        f"{weighted_fve_coverage(tab_fve_df):.1%}",
+        help=(
+            "Súčet výroby FVE delený súčtom odvodenej spotreby lokality. "
+            "Spotreba sa odvodzuje z mesačnej výroby a mesačného percenta pokrytia."
+        ),
     )
 
     pie_labels_kwh = [
@@ -1512,9 +1678,7 @@ elif selected_tab == TAB_NAMES[3]:
 
   if not pdf_only_df.empty:
     df_filtered_inv = (
-        pdf_only_df.drop_duplicates(
-            subset=["EIC", "Číslo faktúry (VS)"], keep="first"
-        )
+        deduplicate_pdf_invoices(pdf_only_df)
         .sort_values(by="_sort_date", ascending=True)
         .reset_index(drop=True)
     )
