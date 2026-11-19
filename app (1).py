@@ -276,8 +276,8 @@ st.sidebar.divider()
 st.title("⚡ Energetický Dashboard & Analýza FVE 2026")
 st.markdown(
     "Interaktívny nástroj pre vyhodnotenie reálnych spotrieb, nákladov (PDF"
-    " faktúry + dobropisy + spravodlivo prepočítané podružné merania) a úspor"
-    " z FVE."
+    " faktúry + dobropisy/preplatky + spravodlivo prepočítané podružné"
+    " merania) a úspor z FVE."
 )
 
 # --- MAPOVANIE EIC KÓDOV NA ODBERNÉ MIESTA LUNYS ---
@@ -613,8 +613,8 @@ def build_presentation_excel(
       df_table=inv_clean,
       heading="AUDIT ZSE FAKTÚR A SANKCIÍ 2026",
       sub_note=(
-          "Rozpad fakturovaných položiek vrátane dobropisov a čistej ceny"
-          " silovej zložky. Červeným sú zvýraznené sankčné poplatky."
+          "Rozpad fakturovaných položiek vrátane dobropisov/preplatkov a čistej"
+          " ceny silovej zložky. Červeným sú zvýraznené sankčné poplatky."
       ),
       add_sum_row=True,
       highlight_penalties=True,
@@ -687,7 +687,7 @@ def build_presentation_excel(
   return output.getvalue()
 
 
-# Slovenský zápis sumy vrátane záporných dobropisov: "-1 234,56", "−1234,56", "12,30".
+# Slovenský zápis sumy vrátane záporných preplatkov/dobropisov: "-1 234,56", "−1234,56", "12,30".
 MINUS_CLASS = r"[-−–]"
 AMOUNT_PATTERN = (
     rf"(?<![\d.,])(?:{MINUS_CLASS}[ \u00a0]?)?"
@@ -701,7 +701,7 @@ def normalize_minus_sign(text_val):
   return re.sub(rf"{MINUS_CLASS}\s*", "-", str(text_val))
 
 
-# --- PARSER ZSE FAKTÚR S PODPOROU DOBROPISOV A OCHRANOU PROTI CHYBÁM ---
+# --- PARSER ZSE FAKTÚR S PODPOROU PREPLATKOV A OCHRANOU PROTI CHYBÁM ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
   if not os.path.exists(pdf_path):
@@ -870,7 +870,9 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       )
 
   cena_silovej_za_kwh = (
-      (silova_eur / silova_kwh) if silova_kwh != 0 else 0.0
+      (silova_eur / silova_kwh)
+      if (silova_kwh > 0 and silova_eur >= 0)
+      else 0.0
   )
 
   distribucia_eur = sumar.get("distribucia")
@@ -1083,7 +1085,9 @@ def load_excel_data(file_mtime=None):
               "Odberné miesto": clean_name,
               "Spotreba (kWh)": k_val,
               "Náklady (€)": e_val,
-              "Cena (€/kWh)": (e_val / k_val) if k_val != 0.0 else 0.0,
+              "Cena (€/kWh)": (e_val / k_val)
+              if (k_val > 0 and e_val >= 0)
+              else 0.0,
               "Cena silovej zložky (€/kWh)": 0.0,
               "Zdroj": "Excel (Podružné meranie / Plán)",
           })
@@ -1133,7 +1137,7 @@ for f in all_pdf_files:
       "Spotreba (kWh)": res["Spotreba (kWh)"],
       "Náklady (€)": res["Spolu bez DPH (€)"],
       "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
-      if res["Spotreba (kWh)"] != 0.0
+      if (res["Spotreba (kWh)"] > 0 and res["Spolu bez DPH (€)"] >= 0)
       else 0.0,
       "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
       "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
@@ -1195,17 +1199,21 @@ for sub_om, parent_om in parent_mapping.items():
     )
     parent_rows = deduplicate_pdf_invoices(elec_df.loc[parent_mask])
     if not parent_rows.empty:
+      valid_parent = parent_rows[
+          (pd.to_numeric(parent_rows["Spotreba (kWh)"], errors="coerce").fillna(0) > 0)
+          & (pd.to_numeric(parent_rows["Náklady (€)"], errors="coerce").fillna(0) >= 0)
+      ]
       p_kwh = (
-          pd.to_numeric(parent_rows["Spotreba (kWh)"], errors="coerce")
+          pd.to_numeric(valid_parent["Spotreba (kWh)"], errors="coerce")
           .fillna(0)
           .sum()
       )
       p_eur = (
-          pd.to_numeric(parent_rows["Náklady (€)"], errors="coerce")
+          pd.to_numeric(valid_parent["Náklady (€)"], errors="coerce")
           .fillna(0)
           .sum()
       )
-      if p_kwh != 0:
+      if p_kwh > 0:
         parent_unit_price = p_eur / p_kwh
         mask = (elec_df["Odberné miesto"] == sub_om) & (elec_df["Mesiac"] == m)
         if mask.any():
@@ -1769,6 +1777,12 @@ elif selected_tab == TAB_NAMES[2]:
         ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
     ].copy()
 
+    df_main_raw["Spotreba (kWh)"] = pd.to_numeric(
+        df_main_raw["Spotreba (kWh)"], errors="coerce"
+    ).fillna(0.0)
+    df_main_raw["Náklady (€)"] = pd.to_numeric(
+        df_main_raw["Náklady (€)"], errors="coerce"
+    ).fillna(0.0)
     if "Silová zložka (€)" not in df_main_raw.columns:
       df_main_raw["Silová zložka (€)"] = 0.0
     else:
@@ -1776,48 +1790,67 @@ elif selected_tab == TAB_NAMES[2]:
           df_main_raw["Silová zložka (€)"], errors="coerce"
       ).fillna(0.0)
 
-    # Konsolidácia po mesiacoch a odberných miestach (spojí faktúru + dobropis do 1 čistého mesačného údaja)
-    df_table_clean = (
-        df_main_raw.groupby(
-            ["Mesiac", "Lokalita", "Odberné miesto"],
-            as_index=False,
-            observed=True,
-        )
-        .agg({
-            "Spotreba (kWh)": "sum",
-            "Náklady (€)": "sum",
-            "Silová zložka (€)": "sum",
-            "Zdroj": lambda s: " + ".join(dict.fromkeys(s.dropna().astype(str))),
-        })
-    )
-
-    df_table_clean["Cena (€/kWh)"] = df_table_clean.apply(
-        lambda r: (r["Náklady (€)"] / r["Spotreba (kWh)"])
-        if r["Spotreba (kWh)"] > 0
-        else None,
-        axis=1,
-    )
-    df_table_clean["Cena silovej zložky (€/kWh)"] = df_table_clean.apply(
-        lambda r: (r["Silová zložka (€)"] / r["Spotreba (kWh)"])
-        if (r["Spotreba (kWh)"] > 0 and r["Silová zložka (€)"] != 0)
-        else None,
-        axis=1,
-    )
-
-    df_table_clean["Mesiac"] = pd.Categorical(
-        df_table_clean["Mesiac"], categories=month_order, ordered=True
-    )
-    df_table_clean = df_table_clean.sort_values(
-        ["Mesiac", "Odberné miesto"]
-    ).reset_index(drop=True)
-
-    df_price_plots = df_table_clean[
-        df_table_clean["Odberné miesto"].isin(allowed_main_oms)
+    # Pre jednotkovú cenu €/kWh berieme len kladné spotreby a nezáporné sumy (mínusové preplatky do priemeru nevstupujú).
+    df_valid_unit = df_main_raw[
+        (df_main_raw["Spotreba (kWh)"] > 0) & (df_main_raw["Náklady (€)"] >= 0)
     ].copy()
+
+    rows_out = []
+    for (m, lok, om), grp in df_valid_unit.groupby(
+        ["Mesiac", "Lokalita", "Odberné miesto"],
+        as_index=False,
+        observed=True,
+    ):
+      kwh_sum = grp["Spotreba (kWh)"].sum()
+      eur_sum = grp["Náklady (€)"].sum()
+      cena_kwh = (eur_sum / kwh_sum) if kwh_sum > 0 else None
+
+      grp_silova = grp[grp["Silová zložka (€)"] >= 0]
+      silova_sum = grp_silova["Silová zložka (€)"].sum()
+      silova_kwh_sum = grp_silova["Spotreba (kWh)"].sum()
+      cena_silova = (
+          (silova_sum / silova_kwh_sum)
+          if (silova_kwh_sum > 0 and silova_sum > 0)
+          else None
+      )
+
+      rows_out.append({
+          "Mesiac": m,
+          "Lokalita": lok,
+          "Odberné miesto": om,
+          "Spotreba (kWh)": kwh_sum,
+          "Náklady (€)": eur_sum,
+          "Cena (€/kWh)": cena_kwh,
+          "Cena silovej zložky (€/kWh)": cena_silova,
+          "Zdroj": " + ".join(
+              dict.fromkeys(grp["Zdroj"].dropna().astype(str))
+          ),
+      })
+
+    df_table_clean = pd.DataFrame(rows_out)
+    if not df_table_clean.empty:
+      df_table_clean["Mesiac"] = pd.Categorical(
+          df_table_clean["Mesiac"], categories=month_order, ordered=True
+      )
+      df_table_clean = df_table_clean.sort_values(
+          ["Mesiac", "Odberné miesto"]
+      ).reset_index(drop=True)
+
+    df_price_plots = (
+        df_table_clean[
+            df_table_clean["Odberné miesto"].isin(allowed_main_oms)
+        ].copy()
+        if not df_table_clean.empty
+        else pd.DataFrame()
+    )
 
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-      plot_total_df = df_price_plots.dropna(subset=["Cena (€/kWh)"])
+      plot_total_df = (
+          df_price_plots.dropna(subset=["Cena (€/kWh)"])
+          if not df_price_plots.empty
+          else pd.DataFrame()
+      )
       if not plot_total_df.empty:
         fig_price = px.line(
             plot_total_df,
@@ -1839,8 +1872,10 @@ elif selected_tab == TAB_NAMES[2]:
         st.plotly_chart(fig_price, use_container_width=True)
 
     with col_p2:
-      plot_silova_df = df_price_plots.dropna(
-          subset=["Cena silovej zložky (€/kWh)"]
+      plot_silova_df = (
+          df_price_plots.dropna(subset=["Cena silovej zložky (€/kWh)"])
+          if not df_price_plots.empty
+          else pd.DataFrame()
       )
       if not plot_silova_df.empty:
         fig_silova = px.line(
@@ -1865,22 +1900,25 @@ elif selected_tab == TAB_NAMES[2]:
     st.divider()
     st.markdown(
         "### 📋 Prehľad hlavných odberných miest (bez podružných meraní,"
-        " konsolidované s dobropismi)"
+        " mínusové preplatky vyňaté z priemeru)"
     )
 
-    st.dataframe(
-        df_table_clean[[
-            "Mesiac",
-            "Odberné miesto",
-            "Spotreba (kWh)",
-            "Náklady (€)",
-            "Cena (€/kWh)",
-            "Cena silovej zložky (€/kWh)",
-            "Zdroj",
-        ]],
-        use_container_width=True,
-        hide_index=True,
-    )
+    if not df_table_clean.empty:
+      st.dataframe(
+          df_table_clean[[
+              "Mesiac",
+              "Odberné miesto",
+              "Spotreba (kWh)",
+              "Náklady (€)",
+              "Cena (€/kWh)",
+              "Cena silovej zložky (€/kWh)",
+              "Zdroj",
+          ]],
+          use_container_width=True,
+          hide_index=True,
+      )
+    else:
+      st.info("Pre zvolené filtre nie sú k dispozícii žiadne kladné dáta pre cenu za kWh.")
   else:
     st.info("Pre zvolené filtre nie sú k dispozícii žiadne dáta.")
 
