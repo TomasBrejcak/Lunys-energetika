@@ -1764,15 +1764,63 @@ elif selected_tab == TAB_NAMES[2]:
         "Beňovský Apartments",
         "Bratislava – Trafo Feld",
     ]
-    df_price_plots = filtered_elec[
-        filtered_elec["Odberné miesto"].isin(allowed_main_oms)
+    sub_to_exclude = [c for children in OM_GROUPS.values() for c in children]
+    df_main_raw = filtered_elec[
+        ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
+    ].copy()
+
+    if "Silová zložka (€)" not in df_main_raw.columns:
+      df_main_raw["Silová zložka (€)"] = 0.0
+    else:
+      df_main_raw["Silová zložka (€)"] = pd.to_numeric(
+          df_main_raw["Silová zložka (€)"], errors="coerce"
+      ).fillna(0.0)
+
+    # Konsolidácia po mesiacoch a odberných miestach (spojí faktúru + dobropis do 1 čistého mesačného údaja)
+    df_table_clean = (
+        df_main_raw.groupby(
+            ["Mesiac", "Lokalita", "Odberné miesto"],
+            as_index=False,
+            observed=True,
+        )
+        .agg({
+            "Spotreba (kWh)": "sum",
+            "Náklady (€)": "sum",
+            "Silová zložka (€)": "sum",
+            "Zdroj": lambda s: " + ".join(dict.fromkeys(s.dropna().astype(str))),
+        })
+    )
+
+    df_table_clean["Cena (€/kWh)"] = df_table_clean.apply(
+        lambda r: (r["Náklady (€)"] / r["Spotreba (kWh)"])
+        if r["Spotreba (kWh)"] > 0
+        else None,
+        axis=1,
+    )
+    df_table_clean["Cena silovej zložky (€/kWh)"] = df_table_clean.apply(
+        lambda r: (r["Silová zložka (€)"] / r["Spotreba (kWh)"])
+        if (r["Spotreba (kWh)"] > 0 and r["Silová zložka (€)"] != 0)
+        else None,
+        axis=1,
+    )
+
+    df_table_clean["Mesiac"] = pd.Categorical(
+        df_table_clean["Mesiac"], categories=month_order, ordered=True
+    )
+    df_table_clean = df_table_clean.sort_values(
+        ["Mesiac", "Odberné miesto"]
+    ).reset_index(drop=True)
+
+    df_price_plots = df_table_clean[
+        df_table_clean["Odberné miesto"].isin(allowed_main_oms)
     ].copy()
 
     col_p1, col_p2 = st.columns(2)
     with col_p1:
-      if not df_price_plots.empty:
+      plot_total_df = df_price_plots.dropna(subset=["Cena (€/kWh)"])
+      if not plot_total_df.empty:
         fig_price = px.line(
-            df_price_plots,
+            plot_total_df,
             x="Mesiac",
             y="Cena (€/kWh)",
             color="Odberné miesto",
@@ -1791,15 +1839,12 @@ elif selected_tab == TAB_NAMES[2]:
         st.plotly_chart(fig_price, use_container_width=True)
 
     with col_p2:
-      df_silova_plot = df_price_plots.copy()
-      if "Cena silovej zložky (€/kWh)" in df_silova_plot.columns:
-        df_silova_plot["Cena silovej zložky (€/kWh)"] = df_silova_plot[
-            "Cena silovej zložky (€/kWh)"
-        ].fillna(0.0)
-
-      if not df_silova_plot.empty:
+      plot_silova_df = df_price_plots.dropna(
+          subset=["Cena silovej zložky (€/kWh)"]
+      )
+      if not plot_silova_df.empty:
         fig_silova = px.line(
-            df_silova_plot,
+            plot_silova_df,
             x="Mesiac",
             y="Cena silovej zložky (€/kWh)",
             color="Odberné miesto",
@@ -1819,13 +1864,9 @@ elif selected_tab == TAB_NAMES[2]:
 
     st.divider()
     st.markdown(
-        "### 📋 Prehľad hlavných odberných miest (bez podružných meraní)"
+        "### 📋 Prehľad hlavných odberných miest (bez podružných meraní,"
+        " konsolidované s dobropismi)"
     )
-
-    sub_to_exclude = [c for children in OM_GROUPS.values() for c in children]
-    df_table_clean = filtered_elec[
-        ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
-    ].copy()
 
     st.dataframe(
         df_table_clean[[
