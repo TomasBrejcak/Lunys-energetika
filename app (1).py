@@ -1,6 +1,8 @@
+import hmac
 import io
 import os
 import re
+from datetime import datetime
 import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
@@ -38,15 +40,83 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+# --- VOLITEĽNÉ HESLO (zapne sa premennou prostredia DASHBOARD_PASSWORD) ---
+_dashboard_password = os.environ.get("DASHBOARD_PASSWORD", "")
+if _dashboard_password and not st.session_state.get("auth_ok", False):
+  st.title("🔒 Prihlásenie")
+  _pwd = st.text_input("Heslo", type="password")
+  if _pwd:
+    if hmac.compare_digest(_pwd.encode("utf-8"), _dashboard_password.encode("utf-8")):
+      st.session_state["auth_ok"] = True
+      st.rerun()
+    else:
+      st.error("Nesprávne heslo.")
+  st.stop()
+
 # --- BEZPEČNÉ VYTVORENIE / OPRAVA PRIEČINKA PRE FAKTÚRY ---
-INVOICE_DIR = "faktury_zse"
+# --- CESTY A KONŠTANTY ---
+# Dáta (faktúry, Excel, log) sú v pracovnom priečinku, alebo v LUNYS_DATA_DIR, ak je nastavený.
+DATA_DIR = os.environ.get("LUNYS_DATA_DIR") or os.getcwd()
+INVOICE_DIR = os.path.join(DATA_DIR, "faktury_zse")
+EXCEL_PATH = os.path.join(DATA_DIR, "Spotreby energií.xlsx")
+ACTIVITY_LOG = os.path.join(DATA_DIR, "aktivita.log")
+MAX_UPLOAD_MB = 15
+
+MONTHS = [
+    "Január",
+    "Február",
+    "Marec",
+    "Apríl",
+    "Máj",
+    "Jún",
+    "Júl",
+    "August",
+    "September",
+    "Október",
+    "November",
+    "December",
+]
+
+# Nadradená trafostanica -> jej podružné merania
+OM_GROUPS = {
+    "Trafostanica PEBEK": ["Skladová hala I.", "Správa 99"],
+    "Trafostanica HARAMIA": ["Bananáreň", "Zemiakareň"],
+}
+
+FVE_COLUMNS = [
+    "Mesiac",
+    "Lokalita_raw",
+    "Vyroba_kWh",
+    "Uspora_EUR",
+    "Podiel_Pokrytia_Pct",
+]
+ELEC_COLUMNS = [
+    "Mesiac",
+    "Lokalita",
+    "Odberné miesto",
+    "Spotreba (kWh)",
+    "Náklady (€)",
+    "Cena (€/kWh)",
+    "Cena silovej zložky (€/kWh)",
+    "Zdroj",
+]
+
 if os.path.exists(INVOICE_DIR) and not os.path.isdir(INVOICE_DIR):
+  st.error(
+      f"'{INVOICE_DIR}' existuje, ale nie je to priečinok. Premenujte alebo"
+      " odstráňte ho ručne."
+  )
+  st.stop()
+os.makedirs(INVOICE_DIR, exist_ok=True)
+
+
+def log_event(message):
+  """Zapíše udalosť (nahratie/zmazanie súboru) do aktivita.log."""
   try:
-    os.remove(INVOICE_DIR)
-  except Exception:
+    with open(ACTIVITY_LOG, "a", encoding="utf-8") as fh:
+      fh.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}\n")
+  except OSError:
     pass
-if not os.path.exists(INVOICE_DIR):
-  os.makedirs(INVOICE_DIR)
 
 
 # --- BEZPEČNÝ NÁZOV SÚBORU (OCHRANA PROTI PATH TRAVERSAL) ---
@@ -60,7 +130,7 @@ def safe_pdf_filename(uploaded_name):
   if not uploaded_name:
     return None
   # basename odstráni ../, ..\\, / aj \\
-  safe_name = os.path.basename(str(uploaded_name).replace("\\\\", "/"))
+  safe_name = os.path.basename(str(uploaded_name).replace("\\", "/"))
   if not safe_name.lower().endswith(".pdf"):
     return None
   target = os.path.join(INVOICE_DIR, safe_name)
@@ -71,13 +141,103 @@ def safe_pdf_filename(uploaded_name):
   return target_abs
 
 
+# --- NAHRÁVANIE / ZOZNAM / MAZANIE PDF FAKTÚR (jedna implementácia) ---
+def render_pdf_manager(key_suffix, expanded):
+  with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=expanded):
+    flash = st.session_state.pop("upload_flash", None)
+    if flash:
+      level, message = flash
+      getattr(st, level)(message)
+
+    # Zmena kľúča po spracovaní vyprázdni uploader (inak by sa st.rerun() cyklil).
+    gen = st.session_state.get("uploader_gen", 0)
+    uploaded_files = st.file_uploader(
+        "Vyber PDF faktúry zo ZSE na nahranie",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key=f"pdf_uploader_{key_suffix}_{gen}",
+    )
+
+    if uploaded_files:
+      saved, skipped = [], []
+      for uploaded_file in uploaded_files:
+        target_path = safe_pdf_filename(uploaded_file.name)
+        if target_path is None:
+          skipped.append(f"{uploaded_file.name} (neplatný názov)")
+          continue
+        if uploaded_file.size > MAX_UPLOAD_MB * 1024 * 1024:
+          skipped.append(
+              f"{uploaded_file.name} (väčší ako {MAX_UPLOAD_MB} MB)"
+          )
+          continue
+        data = uploaded_file.getbuffer()
+        if bytes(data[:5]) != b"%PDF-":
+          skipped.append(f"{uploaded_file.name} (nie je platné PDF)")
+          continue
+        if os.path.exists(target_path):
+          skipped.append(f"{uploaded_file.name} (už existuje)")
+          continue
+        with open(target_path, "wb") as out:
+          out.write(data)
+        saved.append(uploaded_file.name)
+        log_event(f"UPLOAD {os.path.basename(target_path)}")
+
+      parts = []
+      if saved:
+        parts.append(f"Nahraté súbory: {len(saved)}")
+      if skipped:
+        parts.append("Preskočené: " + "; ".join(skipped))
+      st.session_state.upload_flash = (
+          "success" if saved and not skipped else "warning",
+          " | ".join(parts),
+      )
+      st.session_state.uploader_gen = gen + 1
+      st.rerun()
+
+    existing_pdfs = sorted(
+        f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")
+    )
+    if existing_pdfs:
+      st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
+      for pdf_file in existing_pdfs:
+        col_f1, col_f2, col_f3 = st.columns([5, 1, 1])
+        col_f1.text(pdf_file)
+        if st.session_state.get("confirm_delete") == pdf_file:
+          if col_f2.button("✅ Zmazať", key=f"delok_{key_suffix}_{pdf_file}"):
+            try:
+              os.remove(os.path.join(INVOICE_DIR, pdf_file))
+              log_event(f"DELETE {pdf_file}")
+            except Exception as e:
+              st.error(f"Chyba pri mazaní: {e}")
+            st.session_state.confirm_delete = None
+            st.rerun()
+          if col_f3.button("Zrušiť", key=f"delno_{key_suffix}_{pdf_file}"):
+            st.session_state.confirm_delete = None
+            st.rerun()
+        else:
+          if col_f2.button("🗑️", key=f"del_{key_suffix}_{pdf_file}"):
+            st.session_state.confirm_delete = pdf_file
+            st.rerun()
+    else:
+      st.info(
+          "Zatiaľ nie sú v priečinku `faktury_zse` nahrané žiadne PDF súbory."
+      )
+
+
 # --- LOGO V SIDEBARE ---
-if os.path.exists("logo.svg"):
-  st.sidebar.image("logo.svg", width=220)
-elif os.path.exists("logo.png"):
-  st.sidebar.image("logo.png", width=220)
-elif os.path.exists("logo.jpg"):
-  st.sidebar.image("logo.jpg", width=220)
+_logo_path = next(
+    (
+        p
+        for p in (
+            os.path.join(DATA_DIR, name)
+            for name in ("logo.svg", "logo.png", "logo.jpg")
+        )
+        if os.path.exists(p)
+    ),
+    None,
+)
+if _logo_path:
+  st.sidebar.image(_logo_path, width=220)
 else:
   st.sidebar.markdown("### LUNYS, s.r.o.")
 
@@ -154,6 +314,7 @@ def deduplicate_pdf_invoices(df):
 
 
 # --- FUNKCIA NA GENEROVANIE PREZENTAČNÉHO EXCEL REPORTU ---
+@st.cache_data(show_spinner=False)
 def build_presentation_excel(
     df_detail,
     df_kpi_clean,
@@ -275,7 +436,7 @@ def build_presentation_excel(
           ):
             cell.fill = alert_fill
             cell.font = font_alert
-        elif "Cena" in col_title:
+        elif "cena" in col_title.lower():
           cell.number_format = "0.0000 €"
           cell.alignment = Alignment(horizontal="right")
         elif any(k in col_title for k in ["Podiel", "%"]):
@@ -303,13 +464,16 @@ def build_presentation_excel(
               else "#,##0.00 €"
           )
           cell.alignment = Alignment(horizontal="right")
-        elif "Cena" in col_title:
+        elif "cena" in col_title.lower():
           kwh_cols = [i + 1 for i, c in enumerate(cols) if "(kWh)" in c]
-          eur_cols = [
-              i + 1
-              for i, c in enumerate(cols)
-              if "Náklady" in c or "Spolu bez DPH" in c
-          ]
+          if "silov" in col_title.lower() and "Silová zložka (€)" in cols:
+            eur_cols = [cols.index("Silová zložka (€)") + 1]
+          else:
+            eur_cols = [
+                i + 1
+                for i, c in enumerate(cols)
+                if "Náklady" in c or "Spolu bez DPH" in c
+            ]
           if kwh_cols and eur_cols:
             k_let = get_column_letter(kwh_cols[0])
             e_let = get_column_letter(eur_cols[0])
@@ -492,6 +656,11 @@ def build_presentation_excel(
   return output.getvalue()
 
 
+# Slovenský zápis sumy: "1 234,56", "1234,56", "12,30" (množstvá so 4 desatinnými miestami sa ignorujú).
+AMOUNT_PATTERN = r"(?<![\d.,])(?:\d{1,3}(?:[ \u00a0]\d{3})+|\d+),\d{2}(?!\d)"
+AMOUNT_RE = re.compile(AMOUNT_PATTERN)
+
+
 # --- PARSER ZSE FAKTÚR S OCHRANOU PROTI CHYBÁM ---
 @st.cache_data
 def parse_zse_pdf(pdf_path, file_mtime=None):
@@ -540,42 +709,40 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       else "0000-00-00"
   )
 
-  month_map = {
-      "01": "Január",
-      "02": "Február",
-      "03": "Marec",
-      "04": "Apríl",
-      "05": "Máj",
-      "06": "Jún",
-      "07": "Júl",
-      "08": "August",
-      "09": "September",
-      "10": "Október",
-      "11": "November",
-      "12": "December",
-  }
+  month_map = {f"{i:02d}": name for i, name in enumerate(MONTHS, start=1)}
   invoice_month = (
       month_map.get(sort_date[1], "Neuvedené")
       if len(sort_date) == 3
       else "Neuvedené"
   )
 
+  SKIP_MARKERS = ("technické údaje", "stav")
+
+  def to_float(raw):
+    return float(raw.replace(" ", "").replace("\u00a0", "").replace(",", "."))
+
+  def last_amount(fragment):
+    """Posledná platná suma (€) vo fragmente textu alebo None."""
+    amounts = AMOUNT_RE.findall(fragment)
+    if not amounts:
+      return None
+    try:
+      val = to_float(amounts[-1])
+    except ValueError:
+      return None
+    return val if 0 <= val < 1000000 else None
+
   def get_exact_line_cost(keywords):
     if isinstance(keywords, str):
       keywords = [keywords]
     for line in text.split("\n"):
-      if any(kw.lower() in line.lower() for kw in keywords):
-        if any(x in line.lower() for x in ["technické údaje", "stav"]):
-          continue
-        amounts = re.findall(r"(\d{1,3}(?:\s?\d{3})*,\d{2})", line)
-        if amounts:
-          val_str = amounts[-1].replace(" ", "").replace(",", ".")
-          try:
-            val = float(val_str)
-            if 0 <= val < 1000000:
-              return val
-          except Exception:
-            pass
+      low = line.lower()
+      if any(kw.lower() in low for kw in keywords) and not any(
+          x in low for x in SKIP_MARKERS
+      ):
+        val = last_amount(line)
+        if val is not None:
+          return val
     return 0.0
 
   def get_penalty_cost(keywords):
@@ -583,36 +750,20 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       keywords = [keywords]
     for kw in keywords:
       for line in text.split("\n"):
-        if kw.lower() in line.lower():
-          if any(x in line.lower() for x in ["technické údaje", "stav"]):
-            continue
-          amounts = re.findall(r"(\d{1,3}(?:\s?\d{3})*,\d{2})", line)
-          if amounts:
-            val_str = amounts[-1].replace(" ", "").replace(",", ".")
-            try:
-              val = float(val_str)
-              if 0 <= val < 1000000:
-                return val
-            except Exception:
-              pass
-      matches = [
-          m.start() for m in re.finditer(re.escape(kw), text, re.IGNORECASE)
-      ]
-      for pos in matches:
-        window = text[pos : pos + 150]
-        if any(x in window.lower() for x in ["technické údaje", "stav"]):
+        low = line.lower()
+        if kw.lower() in low and not any(x in low for x in SKIP_MARKERS):
+          val = last_amount(line)
+          if val is not None:
+            return val
+      # záložné hľadanie: suma na nasledujúcom riadku (krátke okno)
+      for m in re.finditer(re.escape(kw), text, re.IGNORECASE):
+        window = text[m.start() : m.start() + 100]
+        if any(x in window.lower() for x in SKIP_MARKERS):
           continue
-        amounts = re.findall(r"(\d{1,3}(?:\s?\d{3})*,\d{2})", window)
-        if amounts:
-          val_str = amounts[-1].replace(" ", "").replace(",", ".")
-          try:
-            val = float(val_str)
-            if 0 <= val < 1000000:
-              return val
-          except Exception:
-            pass
+        val = last_amount(window)
+        if val is not None:
+          return val
     return 0.0
-
   def parse_local_number(raw_value):
     """Prevod slovenského zápisu čísla (napr. 12 345,678) na float."""
     value = str(raw_value).replace("\u00a0", " ").strip()
@@ -643,55 +794,47 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
     return 0.0
 
   silova_kwh = get_line_kwh(["1T za elektrinu", "ČE 1T", "Dodávka elektriny"])
-  silova_eur = get_exact_line_cost(["Dodávka elektriny"])
-  if silova_eur == 0.0:
-    silova_eur = get_exact_line_cost(
-        ["1T za elektrinu", "Register-Special", "ČE 1T"]
-    )
+
+  # "Sumár za faktúru" je najspoľahlivejší zdroj súm a slúži aj ako kontrolný súčet.
+  # (Pozor: "Suma spolu" na 1. strane je suma po DPH a zálohách - nepoužívať.)
+  sumar = {}
+  sumar_idx = text.find("Sumár za faktúru")
+  if sumar_idx >= 0:
+    sumar_block = text[sumar_idx : sumar_idx + 800]
+    for key, label in (
+        ("dodavka", "Dodávka elektriny"),
+        ("distribucia", "Distribúcia elektriny"),
+        ("dan", "Spotrebná daň"),
+        ("spolu", "Suma spolu"),
+    ):
+      m = re.search(
+          re.escape(label) + r"[ \t]*(" + AMOUNT_PATTERN + ")", sumar_block
+      )
+      if m:
+        sumar[key] = to_float(m.group(1))
+
+  silova_eur = sumar.get("dodavka")
+  if silova_eur is None:
+    silova_eur = get_exact_line_cost(["Dodávka elektriny"])
+    if silova_eur == 0.0:
+      silova_eur = get_exact_line_cost(
+          ["1T za elektrinu", "Register-Special", "ČE 1T"]
+      )
 
   cena_silovej_za_kwh = (
       (silova_eur / silova_kwh) if silova_kwh > 0 else 0.0
   )
 
-  distribucia_eur = 0.0
-  sumar_section = re.search(
-      r"(?:Sumár za miesto spotreby|Sumár za faktúru).*?(?=Suma spolu|$)",
-      text,
-      re.IGNORECASE | re.DOTALL,
-  )
-  if sumar_section:
-    distrib_match = re.search(
-        r"Distribúcia elektriny[^\d]*([\d\s]+,\d{2})\s*€",
-        sumar_section.group(0),
-        re.IGNORECASE,
-    )
-    if distrib_match:
-      try:
-        distribucia_eur = float(
-            distrib_match.group(1).replace(" ", "").replace(",", ".")
-        )
-      except Exception:
-        pass
-
-  if distribucia_eur == 0.0:
+  distribucia_eur = sumar.get("distribucia")
+  if distribucia_eur is None:
+    distribucia_eur = 0.0
     distrib_section = re.search(
-        r"Služba:\s*Distribúcia.*?(Spolu bez DPH.*?€)",
+        r"Služba:\s*Distribúcia.*?Spolu bez DPH\s*(" + AMOUNT_PATTERN + ")",
         text,
         re.IGNORECASE | re.DOTALL,
     )
     if distrib_section:
-      match_sum = re.search(
-          r"Spolu bez DPH\s*([\d\s]+,\d{2})\s*€",
-          distrib_section.group(1),
-          re.IGNORECASE,
-      )
-      if match_sum:
-        try:
-          distribucia_eur = float(
-              match_sum.group(1).replace(" ", "").replace(",", ".")
-          )
-        except Exception:
-          pass
+      distribucia_eur = to_float(distrib_section.group(1))
 
   rk_prekrocenie = get_penalty_cost([
       "Prekročenie rezervovanej kapacity",
@@ -713,32 +856,49 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       "Dodávka jalovej kapacitnej",
   ])
 
+  # Všeobecné slovo "Účinník" sa zámerne nehľadá (je aj v poučení na 4. strane).
   ucinnik = get_penalty_cost([
       "Prirážka za nedodržanie účinníka",
       "Nedodržanie účinníka",
       "Prirážka za účinník",
-      "Účinník",
   ])
 
   celkove_pokuty = rk_prekrocenie + mrk_prekrocenie + jalovina + ucinnik
 
-  spolu_bez_dph = 0.0
-  rekap_match = re.search(
-      r"(?:Základ dane celkom|Spolu bez DPH celkom|Celkom bez DPH).*?(\d{1,3}(?:\s?\d{3})*,\d{2})",
-      text,
-      re.IGNORECASE,
-  )
-  if rekap_match:
-    try:
-      val = float(rekap_match.group(1).replace(" ", "").replace(",", "."))
+  spolu_bez_dph = sumar.get("spolu")
+  if spolu_bez_dph is None:
+    spolu_bez_dph = 0.0
+    rekap_match = re.search(
+        r"(?:Základ dane celkom|Spolu bez DPH celkom|Celkom bez DPH).*?("
+        + AMOUNT_PATTERN
+        + ")",
+        text,
+        re.IGNORECASE,
+    )
+    if rekap_match:
+      val = to_float(rekap_match.group(1))
       if 0 < val < 1000000:
         spolu_bez_dph = val
-    except Exception:
-      pass
+    if spolu_bez_dph == 0.0:
+      spolu_bez_dph = silova_eur + distribucia_eur
 
-  if spolu_bez_dph == 0.0:
-    spolu_bez_dph = silova_eur + distribucia_eur
-
+  # Kontroly kvality spracovania
+  upozornenia = []
+  if "spolu" in sumar:
+    zlozky = silova_eur + distribucia_eur + sumar.get("dan", 0.0)
+    if abs(zlozky - sumar["spolu"]) > 0.05:
+      upozornenia.append("Súčet zložiek nesedí so 'Suma spolu'")
+  else:
+    upozornenia.append("Chýba 'Sumár za faktúru' - sumy sú odhadnuté")
+  if silova_kwh == 0.0:
+    upozornenia.append("Nenašla sa spotreba kWh")
+  if (
+      len(set(re.findall(r"24Z[A-Z0-9]{13}", text))) > 1
+      or text.count("Spolu za miesto spotreby číslo") > 1
+  ):
+    upozornenia.append(
+        "Faktúra obsahuje viac odberných miest - spracované je len prvé"
+    )
   return {
       "EIC": eic_code,
       "Odberné miesto": om_info["nazov"],
@@ -757,6 +917,7 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
       "Prirážka za účinník (€)": ucinnik,
       "SPOLU POKUTY (€)": celkove_pokuty,
       "Spolu bez DPH (€)": spolu_bez_dph,
+      "Upozornenia": "; ".join(upozornenia),
       "Raw_Text": text,
   }
 
@@ -764,43 +925,14 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
 # --- NAČÍTANIE FVE A EXCEL DÁT ---
 @st.cache_data
 def load_excel_data(file_mtime=None):
-  file_path = "Spotreby energií.xlsx"
-  empty_fve = pd.DataFrame(columns=[
-      "Mesiac",
-      "Lokalita_raw",
-      "Vyroba_kWh",
-      "Uspora_EUR",
-      "Podiel_Pokrytia_Pct",
-  ])
-  empty_elec = pd.DataFrame(columns=[
-      "Mesiac",
-      "Lokalita",
-      "Odberné miesto",
-      "Spotreba (kWh)",
-      "Náklady (€)",
-      "Cena (€/kWh)",
-      "Cena silovej zložky (€/kWh)",
-      "Zdroj",
-  ])
+  file_path = EXCEL_PATH
+  empty_fve = pd.DataFrame(columns=FVE_COLUMNS)
+  empty_elec = pd.DataFrame(columns=ELEC_COLUMNS)
   if not os.path.exists(file_path):
     return empty_fve, empty_elec
 
   xls = pd.ExcelFile(file_path)
-  months = [
-      "Január",
-      "Február",
-      "Marec",
-      "Apríl",
-      "Máj",
-      "Jún",
-      "Júl",
-      "August",
-      "September",
-      "Október",
-      "November",
-      "December",
-  ]
-
+  months = MONTHS
   df_fve_raw = pd.read_excel(xls, sheet_name="Prehľad po FVE.2026")
 
   def fve_row_values(row_index):
@@ -834,7 +966,6 @@ def load_excel_data(file_mtime=None):
   )
   records = []
 
-  current_lokalita = "Poprad"
   for idx in range(len(df_elec_raw)):
     row = df_elec_raw.iloc[idx]
     val0 = str(row.iloc[0]).strip() if pd.notna(row.iloc[0]) else ""
@@ -846,11 +977,6 @@ def load_excel_data(file_mtime=None):
         or "nove trafo" in combined_text.lower()
     ):
       continue
-
-    if "bratislava" in combined_text.lower():
-      current_lokalita = "Bratislava"
-    elif "poprad" in combined_text.lower():
-      current_lokalita = "Poprad"
 
     if "spotreba" in combined_text.lower():
       raw_lower = combined_text.lower()
@@ -916,54 +1042,69 @@ def load_excel_data(file_mtime=None):
               "Zdroj": "Excel (Podružné meranie / Plán)",
           })
 
-  excel_elec_df = pd.DataFrame(records)
+  excel_elec_df = pd.DataFrame(records, columns=ELEC_COLUMNS)
   return fve_df, excel_elec_df
 
 
-excel_path = "Spotreby energií.xlsx"
 excel_mtime = (
-    os.path.getmtime(excel_path) if os.path.exists(excel_path) else None
+    os.path.getmtime(EXCEL_PATH) if os.path.exists(EXCEL_PATH) else None
 )
-fve_df, excel_elec_df = load_excel_data(excel_mtime)
+try:
+  fve_df, excel_elec_df = load_excel_data(excel_mtime)
+except Exception as exc:
+  st.error(
+      f"Nepodarilo sa načítať '{os.path.basename(EXCEL_PATH)}': {exc}. "
+      "Skontrolujte, či súbor nie je poškodený a či obsahuje záložky "
+      "'Prehľad po FVE.2026' a 'Prehľad elektro.2026'."
+  )
+  fve_df = pd.DataFrame(columns=FVE_COLUMNS)
+  excel_elec_df = pd.DataFrame(columns=ELEC_COLUMNS)
 
 # Načítanie PDF faktúr pre hlavné miesta s bezpečným ošetrením
-all_pdf_files = (
-    [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
-    if (os.path.exists(INVOICE_DIR) and os.path.isdir(INVOICE_DIR))
-    else []
+all_pdf_files = sorted(
+    f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")
 )
 parsed_invoice_records = []
+skipped_pdfs = []
 for f in all_pdf_files:
   f_path = os.path.join(INVOICE_DIR, f)
   try:
     res = parse_zse_pdf(f_path, os.path.getmtime(f_path))
-    if (
-        res
-        and res["Odberné miesto"]
-        and "neznáme" not in res["Odberné miesto"].lower()
-    ):
-      parsed_invoice_records.append({
-          "Mesiac": res["Mesiac"],
-          "Lokalita": res["Lokalita"],
-          "Odberné miesto": res["Odberné miesto"],
-          "Spotreba (kWh)": res["Spotreba (kWh)"],
-          "Náklady (€)": res["Spolu bez DPH (€)"],
-          "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
-          if res["Spotreba (kWh)"] > 0
-          else 0.0,
-          "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
-          "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
-          "Fakturačné obdobie": res["Fakturačné obdobie"],
-          "_sort_date": res["_sort_date"],
-          "Raw_Text": res["Raw_Text"],
-          "Zdroj": "PDF Faktúra (ZSE)",
-          **res,
-      })
   except Exception:
+    skipped_pdfs.append(f)
     continue
-
+  if (
+      not res
+      or not res["Odberné miesto"]
+      or "neznáme" in res["Odberné miesto"].lower()
+  ):
+    skipped_pdfs.append(f)
+    continue
+  parsed_invoice_records.append({
+      "Mesiac": res["Mesiac"],
+      "Lokalita": res["Lokalita"],
+      "Odberné miesto": res["Odberné miesto"],
+      "Spotreba (kWh)": res["Spotreba (kWh)"],
+      "Náklady (€)": res["Spolu bez DPH (€)"],
+      "Cena (€/kWh)": (res["Spolu bez DPH (€)"] / res["Spotreba (kWh)"])
+      if res["Spotreba (kWh)"] > 0
+      else 0.0,
+      "Cena silovej zložky (€/kWh)": res["Cena silovej zložky (€/kWh)"],
+      "Číslo faktúry (VS)": res["Číslo faktúry (VS)"],
+      "Fakturačné obdobie": res["Fakturačné obdobie"],
+      "_sort_date": res["_sort_date"],
+      "Raw_Text": res["Raw_Text"],
+      "Zdroj": "PDF Faktúra (ZSE)",
+      **res,
+  })
 pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 pdf_elec_df = deduplicate_pdf_invoices(pdf_elec_df)
+
+if skipped_pdfs:
+  st.sidebar.warning(
+      "⚠️ Nespracované PDF (neznáme EIC alebo nečitateľný súbor): "
+      + ", ".join(skipped_pdfs)
+  )
 
 # PDF nahrádza Excel len pre konkrétne odberné miesto a mesiac
 if not pdf_elec_df.empty:
@@ -984,34 +1125,19 @@ if not pdf_elec_df.empty:
         [key not in pdf_month_keys for key in excel_keys]
     ].copy()
   elec_df = pd.concat(
-      [pdf_elec_df, excel_elec_df], ignore_index=True, sort=False
+      [pdf_elec_df.drop(columns=["Raw_Text"], errors="ignore"), excel_elec_df],
+      ignore_index=True,
+      sort=False,
   )
 else:
   elec_df = excel_elec_df.copy()
 
 # --- DYNAMICKÝ A SPRAVODLIVÝ PREPOČET PODRUŽNÝCH MERANÍ PODĽA NADRADENEJ TRAFOSTANICE ---
-month_order = [
-    "Január",
-    "Február",
-    "Marec",
-    "Apríl",
-    "Máj",
-    "Jún",
-    "Júl",
-    "August",
-    "September",
-    "Október",
-    "November",
-    "December",
-]
+month_order = MONTHS
 
 parent_mapping = {
-    "Skladová hala I.": "Trafostanica PEBEK",
-    "Správa 99": "Trafostanica PEBEK",
-    "Bananáreň": "Trafostanica HARAMIA",
-    "Zemiakareň": "Trafostanica HARAMIA",
+    child: parent for parent, children in OM_GROUPS.items() for child in children
 }
-
 for sub_om, parent_om in parent_mapping.items():
   for m in month_order:
     if elec_df.empty:
@@ -1045,6 +1171,21 @@ for sub_om, parent_om in parent_mapping.items():
           elec_df.loc[mask, "Zdroj"] = (
               f"Prepočítané podľa {parent_om} (PDF cena)"
           )
+
+
+def drop_covered_submeters(df):
+  """Vylúči podružné merania len v mesiacoch, kde existuje meranie nadradenej trafostanice."""
+  if df is None or df.empty:
+    return df
+  months_str = df["Mesiac"].astype(str)
+  drop_mask = pd.Series(False, index=df.index)
+  for parent, children in OM_GROUPS.items():
+    parent_months = set(months_str[df["Odberné miesto"] == parent])
+    if parent_months:
+      drop_mask |= df["Odberné miesto"].isin(children) & months_str.isin(
+          parent_months
+      )
+  return df[~drop_mask]
 
 
 def weighted_fve_coverage(df):
@@ -1096,11 +1237,6 @@ all_possible_oms = (
     if not elec_df.empty
     else []
 )
-
-OM_GROUPS = {
-    "Trafostanica PEBEK": ["Skladová hala I.", "Správa 99"],
-    "Trafostanica HARAMIA": ["Bananáreň", "Zemiakareň"],
-}
 
 if "selected_oms" not in st.session_state:
   st.session_state.selected_oms = list(all_possible_oms)
@@ -1341,23 +1477,13 @@ if not filtered_elec.empty:
   )
   filtered_elec = filtered_elec.sort_values("Mesiac")
 
-kpi_df = filtered_elec.copy()
-if not kpi_df.empty:
-  if "Trafostanica PEBEK" in kpi_df["Odberné miesto"].values:
-    kpi_df = kpi_df[
-        ~kpi_df["Odberné miesto"].isin(["Skladová hala I.", "Správa 99"])
-    ]
-  if "Trafostanica HARAMIA" in kpi_df["Odberné miesto"].values:
-    kpi_df = kpi_df[
-        ~kpi_df["Odberné miesto"].isin(["Bananáreň", "Zemiakareň"])
-    ]
-
+kpi_df = drop_covered_submeters(filtered_elec)
 pdf_filtered_for_export = pd.DataFrame()
 if not pdf_elec_df.empty and selected_months and st.session_state.selected_oms:
   pdf_filtered_for_export = pdf_elec_df[
       pdf_elec_df["Mesiac"].isin(selected_months)
       & pdf_elec_df["Odberné miesto"].isin(st.session_state.selected_oms)
-  ].copy()
+  ].drop(columns=["Raw_Text"], errors="ignore")
 
 if not filtered_elec.empty:
   excel_data = build_presentation_excel(
@@ -1382,34 +1508,30 @@ if not filtered_elec.empty:
 
 st.sidebar.divider()
 st.sidebar.subheader("⚡ Rýchla navigácia")
-if st.sidebar.button(
+st.sidebar.button(
     "📉 Spotreby & Náklady",
     use_container_width=True,
     on_click=set_tab,
     args=(TAB_NAMES[0],),
-):
-  pass
-if st.sidebar.button(
+)
+st.sidebar.button(
     "☀️ Výkon FVE",
     use_container_width=True,
     on_click=set_tab,
     args=(TAB_NAMES[1],),
-):
-  pass
-if st.sidebar.button(
+)
+st.sidebar.button(
     "💶 Cena za 1 kWh",
     use_container_width=True,
     on_click=set_tab,
     args=(TAB_NAMES[2],),
-):
-  pass
-if st.sidebar.button(
+)
+st.sidebar.button(
     "📄 Analýza PDF Faktúr",
     use_container_width=True,
     on_click=set_tab,
     args=(TAB_NAMES[3],),
-):
-  pass
+)
 
 # --- HLAVNÉ KPI KARTY ---
 total_elec_kwh = (
@@ -1485,20 +1607,7 @@ if selected_tab == TAB_NAMES[0]:
       st.plotly_chart(fig_elec_eur, use_container_width=True)
 
     # --- Očistenie súčtov pod grafmi od duplicitných podružných meraní ---
-    chart_summary_df = filtered_elec.copy()
-    if "Trafostanica PEBEK" in chart_summary_df["Odberné miesto"].values:
-      chart_summary_df = chart_summary_df[
-          ~chart_summary_df["Odberné miesto"].isin(
-              ["Skladová hala I.", "Správa 99"]
-          )
-      ]
-    if "Trafostanica HARAMIA" in chart_summary_df["Odberné miesto"].values:
-      chart_summary_df = chart_summary_df[
-          ~chart_summary_df["Odberné miesto"].isin(
-              ["Bananáreň", "Zemiakareň"]
-          )
-      ]
-
+    chart_summary_df = drop_covered_submeters(filtered_elec)
     st.markdown("### 📌 Súhrn pre vybraný filter grafov (bez duplicity)")
     sc1, sc2, sc3 = st.columns(3)
     sum_chart_kwh = chart_summary_df["Spotreba (kWh)"].sum()
@@ -1668,7 +1777,7 @@ elif selected_tab == TAB_NAMES[2]:
         "### 📋 Prehľad hlavných odberných miest (bez podružných meraní)"
     )
 
-    sub_to_exclude = ["Skladová hala I.", "Správa 99", "Bananáreň", "Zemiakareň"]
+    sub_to_exclude = [c for children in OM_GROUPS.values() for c in children]
     df_table_clean = filtered_elec[
         ~filtered_elec["Odberné miesto"].isin(sub_to_exclude)
     ].copy()
@@ -1709,6 +1818,14 @@ elif selected_tab == TAB_NAMES[3]:
     )
 
     st.success(f"Zobrazených jedinečných faktúr: {len(df_filtered_inv)}")
+    if "Upozornenia" in df_filtered_inv.columns:
+      for _, warn_row in df_filtered_inv[
+          df_filtered_inv["Upozornenia"].astype(str).str.len() > 0
+      ].iterrows():
+        st.warning(
+            f"Faktúra {warn_row['Číslo faktúry (VS)']}:"
+            f" {warn_row['Upozornenia']}"
+        )
     st.divider()
 
     st.markdown("### 📈 Súhrnný prehľad nákladov a sankcií z faktúr")
@@ -1776,47 +1893,7 @@ elif selected_tab == TAB_NAMES[3]:
 
     st.divider()
 
-    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=False):
-      uploaded_files = st.file_uploader(
-          "Vyber PDF faktúry zo ZSE na nahranie",
-          type=["pdf"],
-          accept_multiple_files=True,
-          key="pdf_uploader_tab",
-      )
-
-      if uploaded_files:
-        for uploaded_file in uploaded_files:
-          target_path = safe_pdf_filename(uploaded_file.name)
-          if target_path is None:
-            st.error(f"Neplatný súbor (odmietnutý): {uploaded_file.name}")
-            continue
-          if not os.path.exists(target_path):
-            with open(target_path, "wb") as f:
-              f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahraté.")
-        st.rerun()
-
-      existing_pdfs = (
-          [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
-          if os.path.exists(INVOICE_DIR)
-          else []
-      )
-      if existing_pdfs:
-        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
-        for pdf_file in existing_pdfs:
-          col_f1, col_f2 = st.columns([5, 1])
-          col_f1.text(pdf_file)
-          if col_f2.button("🗑️ Zmazať", key=f"del_{pdf_file}"):
-            try:
-              os.remove(os.path.join(INVOICE_DIR, pdf_file))
-              st.rerun()
-            except Exception as e:
-              st.error(f"Chyba pri mazaní: {e}")
-      else:
-        st.info(
-            "Zatiaľ nie sú v priečinku `faktury_zse` nahrané žiadne PDF súbory."
-        )
-
+    render_pdf_manager("tab", expanded=False)
     st.divider()
 
     st.markdown("### 🔎 Detail faktúr podľa mesiacov")
@@ -1852,39 +1929,4 @@ elif selected_tab == TAB_NAMES[3]:
     st.info("Pre zvolené filtre neboli nájdené žiadne spracované PDF faktúry.")
 
     st.divider()
-    with st.expander("📥 Nahrať nové PDF faktúry a správa súborov", expanded=True):
-      uploaded_files = st.file_uploader(
-          "Vyber PDF faktúry zo ZSE na nahranie",
-          type=["pdf"],
-          accept_multiple_files=True,
-          key="pdf_uploader_tab_empty",
-      )
-
-      if uploaded_files:
-        for uploaded_file in uploaded_files:
-          target_path = safe_pdf_filename(uploaded_file.name)
-          if target_path is None:
-            st.error(f"Neplatný súbor (odmietnutý): {uploaded_file.name}")
-            continue
-          if not os.path.exists(target_path):
-            with open(target_path, "wb") as f:
-              f.write(uploaded_file.getbuffer())
-        st.success("Súbory boli úspešne nahraté.")
-        st.rerun()
-
-      existing_pdfs = (
-          [f for f in os.listdir(INVOICE_DIR) if f.lower().endswith(".pdf")]
-          if os.path.exists(INVOICE_DIR)
-          else []
-      )
-      if existing_pdfs:
-        st.markdown(f"**Uložené PDF súbory v priečinku ({len(existing_pdfs)}):**")
-        for pdf_file in existing_pdfs:
-          col_f1, col_f2 = st.columns([5, 1])
-          col_f1.text(pdf_file)
-          if col_f2.button("🗑️ Zmazať", key=f"del_empty_{pdf_file}"):
-            try:
-              os.remove(os.path.join(INVOICE_DIR, pdf_file))
-              st.rerun()
-            except Exception as e:
-              st.error(f"Chyba pri mazaní: {e}")
+    render_pdf_manager("empty", expanded=True)
