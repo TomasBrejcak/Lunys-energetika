@@ -922,6 +922,31 @@ def parse_zse_pdf(pdf_path, file_mtime=None):
   }
 
 
+# --- DIAGNOSTIKA: PREČO SA PDF NEPODARILO SPRACOVAŤ ---
+@st.cache_data
+def diagnose_pdf(pdf_path, file_mtime=None):
+  info = {"reason": "neznámy dôvod", "eic": None, "adresa": None}
+  try:
+    with pdfplumber.open(pdf_path) as pdf:
+      text = "\n".join([page.extract_text() or "" for page in pdf.pages])
+  except Exception as exc:
+    info["reason"] = f"súbor sa nepodarilo otvoriť ako PDF ({exc.__class__.__name__})"
+    return info
+  if not text.strip():
+    info["reason"] = "PDF neobsahuje text (sken / obrázok?)"
+    return info
+  eic = re.search(r"(24Z[A-Z0-9]{13})", text)
+  if not eic:
+    info["reason"] = "nenašiel sa EIC kód odberného miesta (nie je to faktúra ZSE?)"
+    return info
+  info["eic"] = eic.group(1)
+  adresa = re.search(r"Adresa miesta spotreby\s*([^\n]+)", text)
+  info["adresa"] = adresa.group(1).strip() if adresa else None
+  if info["eic"] not in EIC_MAP:
+    info["reason"] = f"EIC {info['eic']} nie je v EIC_MAP"
+  return info
+
+
 # --- NAČÍTANIE FVE A EXCEL DÁT ---
 @st.cache_data
 def load_excel_data(file_mtime=None):
@@ -1070,15 +1095,16 @@ for f in all_pdf_files:
   f_path = os.path.join(INVOICE_DIR, f)
   try:
     res = parse_zse_pdf(f_path, os.path.getmtime(f_path))
-  except Exception:
-    skipped_pdfs.append(f)
+  except Exception as exc:
+    skipped_pdfs.append((f, f"chyba pri spracovaní: {exc!r}", None))
     continue
   if (
       not res
       or not res["Odberné miesto"]
       or "neznáme" in res["Odberné miesto"].lower()
   ):
-    skipped_pdfs.append(f)
+    _info = diagnose_pdf(f_path, os.path.getmtime(f_path))
+    skipped_pdfs.append((f, _info["reason"], _info))
     continue
   parsed_invoice_records.append({
       "Mesiac": res["Mesiac"],
@@ -1101,10 +1127,27 @@ pdf_elec_df = pd.DataFrame(parsed_invoice_records)
 pdf_elec_df = deduplicate_pdf_invoices(pdf_elec_df)
 
 if skipped_pdfs:
-  st.sidebar.warning(
-      "⚠️ Nespracované PDF (neznáme EIC alebo nečitateľný súbor): "
-      + ", ".join(skipped_pdfs)
-  )
+  with st.sidebar.expander(f"⚠️ Nespracované PDF ({len(skipped_pdfs)})"):
+    st.dataframe(
+        pd.DataFrame(
+            [(name, reason) for name, reason, _ in skipped_pdfs],
+            columns=["Súbor", "Dôvod"],
+        ),
+        hide_index=True,
+    )
+    _unknown_eic = {}
+    for _, _, _info in skipped_pdfs:
+      if _info and _info.get("eic") and _info["eic"] not in EIC_MAP:
+        _unknown_eic.setdefault(_info["eic"], _info.get("adresa") or "")
+    if _unknown_eic:
+      st.caption("Chýbajúce odberné miesta - doplňte do EIC_MAP v app.py:")
+      st.code(
+          "\n".join(
+              f'    "{eic}": {{"nazov": "???", "lokalita": "???"}},  # {adr}'
+              for eic, adr in _unknown_eic.items()
+          ),
+          language="python",
+      )
 
 # PDF nahrádza Excel len pre konkrétne odberné miesto a mesiac
 if not pdf_elec_df.empty:
@@ -1174,18 +1217,20 @@ for sub_om, parent_om in parent_mapping.items():
 
 
 def drop_covered_submeters(df):
-  """Vylúči podružné merania len v mesiacoch, kde existuje meranie nadradenej trafostanice."""
+  """Podružné merania sú už zahrnuté v sumári nadradenej trafostanice (faktúra).
+
+  Ak je nadradená trafostanica vo filtrovaných dátach, jej podružné merania sa zo
+  súčtov vylúčia VŽDY (vo všetkých mesiacoch), aby sa spotreba a náklady nepočítali
+  dvakrát. Ak trafostanica nie je vybraná, podružné merania zostanú.
+  """
   if df is None or df.empty:
     return df
-  months_str = df["Mesiac"].astype(str)
-  drop_mask = pd.Series(False, index=df.index)
+  out = df
   for parent, children in OM_GROUPS.items():
-    parent_months = set(months_str[df["Odberné miesto"] == parent])
-    if parent_months:
-      drop_mask |= df["Odberné miesto"].isin(children) & months_str.isin(
-          parent_months
-      )
-  return df[~drop_mask]
+    if parent in out["Odberné miesto"].values:
+      out = out[~out["Odberné miesto"].isin(children)]
+  return out
+
 
 
 def weighted_fve_coverage(df):
@@ -1214,6 +1259,36 @@ def weighted_fve_coverage(df):
       if inferred_consumption > 0
       else 0.0
   )
+
+
+# --- KONTROLA DUPLICÍT (rovnaké odberné miesto + mesiac viackrát) ---
+if not elec_df.empty:
+  _dups = elec_df[elec_df.duplicated(["Odberné miesto", "Mesiac"], keep=False)]
+  if not _dups.empty:
+    with st.sidebar.expander(f"⚠️ Duplicitné záznamy ({len(_dups)})"):
+      st.caption(
+          "Rovnaké odberné miesto a mesiac je v dátach viackrát (napr. dve"
+          " faktúry za ten istý mesiac, alebo rôzny názov v Exceli a vo"
+          " faktúre). Súčty ich sčítajú."
+      )
+      st.dataframe(
+          _dups[
+              [
+                  c
+                  for c in [
+                      "Mesiac",
+                      "Odberné miesto",
+                      "Spotreba (kWh)",
+                      "Náklady (€)",
+                      "Zdroj",
+                      "Číslo faktúry (VS)",
+                      "Fakturačné obdobie",
+                  ]
+                  if c in _dups.columns
+              ]
+          ],
+          hide_index=True,
+      )
 
 
 # --- STAV A HIERARCHICKÝ VÝBER ODBERNÝCH MIEST ---
